@@ -24,6 +24,17 @@
   config:
     path: !!js "process.env.USERPROFILE + '/.dsh/.credentials.yaml'"
 
+# 默认模型。`provider: deepseek-account` 是关键——走**账号平台**那条路线，
+# 正好对上 .credentials.yaml 里那三条 OAuth grant（deepseek-account-platform/*）。
+# 另一条 llm-deepseek-api-key 需要 sk- 形态的 key，这台机器上没有。
+#
+# 这两行照抄本机 desktop profile 里已经跑通的配置，不是猜的。
+# 换成别的供应商（例如 SiliconFlow）时把 provider/model 换掉即可。
+- id: agent-default-model
+  config:
+    provider: deepseek-account
+    model: deepseek-flash
+
 - insert:
     # 开发用：装上 cordis 的 console logger exporter。
     # dsh-base 里没有这一行——不装的话 ctx.logger 的输出没有去处（logger 服务本身是
@@ -81,3 +92,15 @@
       config:
         trigger: mention
         groups: []
+
+    # 常驻 agent：进程一起来就建白羽的会话，让 QQ 那边随时有人可推。
+    # headless 启动不创建 agent，没有这一行 qq-push 会一直报"无人可推"。
+    # greeting 从环境变量取（默认空 = 启动时不说话）；想冒烟测试就
+    #   $env:QQ_RESIDENT_GREETING='...'
+    # 这样不用改这个文件，也不必让测试用语进版本库。
+    - id: qq-resident
+      name: './plugins/qq/resident.ts'
+      config:
+        sessionId: plos-baiyu
+        cwd: ''
+        greeting: !!js "process.env.QQ_RESIDENT_GREETING ?? ''"

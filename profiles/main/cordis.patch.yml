@@ -51,3 +51,8 @@
     # 它 inject ['qq']，所以 qq-adapter 激活后才激活。
     - id: qq-probe
       name: './plugins/qq/probe.ts'
+
+    # 工具包装：把 ctx.qq 的能力包成模型可调用的工具。
+    # inject ['tools','qq']，两者都就绪后才激活。
+    - id: qq-tools
+      name: './plugins/qq/tools.ts'

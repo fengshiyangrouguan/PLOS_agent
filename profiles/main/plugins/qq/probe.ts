@@ -38,7 +38,27 @@ export const inject = ['qq']
  * @param ctx - 本插件的上下文（已注入 `qq`）。
  */
 export function apply(ctx: Context): void {
+  // 一次性诊断：把工具依赖的只读 API 真调一遍，确认拿到的是真实数据而不是空壳。
+  // 只在第一条群消息到达时跑一次，避免刷屏。
+  let diagnosed = false
+
   ctx.on('qq/message', (event) => {
+    const groupId = event.groupId
+    if (!diagnosed && groupId !== undefined) {
+      diagnosed = true
+      void (async () => {
+        try {
+          const members = await ctx.qq.getGroupMemberList(groupId)
+          const sample = members.slice(0, 3)
+            .map(member => `${member.card ?? member.nickname ?? '?'}(${String(member.user_id)})`)
+            .join('、')
+          ctx.logger.info(`[probe-qq] get_group_member_list(${groupId}) → ${String(members.length)} 人，样例：${sample}`)
+        } catch (error) {
+          ctx.logger.warn(`[probe-qq] get_group_member_list 失败：${error instanceof Error ? error.message : String(error)}`)
+        }
+      })()
+    }
+
     // 图片和转发的解析开销最大（真的下字节、真的展开整棵树），没被 @ 就不碰。
     // 引用（reply）只花一次 get_msg，放行——它的渲染结果需要真实数据才能验证。
     const expensive = event.segments.some(

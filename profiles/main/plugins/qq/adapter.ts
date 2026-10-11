@@ -26,6 +26,9 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { Config as ConfigSchema, type Config } from './config.ts'
+import { renderSegments } from './render.ts'
+import { resolveMessage } from './segments.ts'
+import type { ImageDescriber, ResolveContext, ResolvedSegment } from './segment.ts'
 import {
   asSegments,
   echoId,
@@ -183,6 +186,18 @@ export class QqAdapter extends Service {
 
   /** 在途调用，键是 `echo`。 */
   private readonly pending = new Map<string, PendingCall>()
+
+  /** 已解析消息的缓存，键是 `messageId`。见 `resolve()` 的惰性说明。 */
+  private readonly resolveCache = new Map<string, ResolvedSegment[]>()
+
+  /**
+   * 可选的图片描述器（VLM）。
+   *
+   * **适配器自己不实现它**，只提供注入点（`setImageDescriber`）。理由：实现它需要
+   * `ctx.llm`，而"适配器依赖模型"会让 `qq` 这条 seam 变成一个环。由消费方
+   * （persona / 记忆层）实现并注入。
+   */
+  private describe: ImageDescriber | undefined
 
   /** 协议端报告的登录信息；未登录时为 undefined。 */
   private login: LoginInfo | undefined
@@ -608,6 +623,135 @@ export class QqAdapter extends Service {
       user_id: Number(userId),
       duration: durationSeconds,
     })
+  }
+
+  // ────────────────────────── 消息流水线 ──────────────────────────
+
+  /**
+   * 解析一条消息 → 结构化表示。
+   *
+   * **惰性**：不在收到消息时自动跑。原因是配置默认放行所有群消息，而解析会真的去下载
+   * 图片、查引用、展开转发——对没人要看的历史消息做这些是纯浪费。
+   * 需要文本的消费方（`qq-tools`、未来的会话桥）主动调 `render()`。
+   *
+   * 结果按 `messageId` 缓存，同一条消息重复调用不会重复下载。
+   * @param incoming - 入站消息。
+   * @returns 已解析的段。
+   */
+  async resolve(incoming: QqIncoming): Promise<ResolvedSegment[]> {
+    const cached = this.resolveCache.get(incoming.messageId)
+    if (cached !== undefined) return cached
+    const resolved = await resolveMessage(
+      { segments: incoming.segments, raw: incoming.raw },
+      this.resolveContext(),
+    )
+    this.rememberResolved(incoming.messageId, resolved)
+    return resolved
+  }
+
+  /**
+   * 解析并渲染成 LLM 友好文本。
+   * @param incoming - 入站消息。
+   * @returns 可直接放进上下文窗口的文本。
+   */
+  async render(incoming: QqIncoming): Promise<string> {
+    return renderSegments(await this.resolve(incoming))
+  }
+
+  /** 装解析结果，超出上限就丢最旧的。 */
+  private rememberResolved(messageId: string, resolved: ResolvedSegment[]): void {
+    this.resolveCache.set(messageId, resolved)
+    while (this.resolveCache.size > this.config.resolveCacheSize) {
+      const oldest = this.resolveCache.keys().next()
+      if (oldest.done === true) break
+      this.resolveCache.delete(oldest.value)
+    }
+  }
+
+  /**
+   * 构造解析上下文。
+   *
+   * VLM 描述器**目前不接**（`describe` 留空）：它需要 `ctx.llm`，而把"适配器"和
+   * "模型调用"绑在一起会让这条 seam 变成环。等 persona 层落地时，由那一侧实现
+   * `ImageDescriber` 并通过 `qq` 服务的可选钩子注入。
+   */
+  private resolveContext(): ResolveContext {
+    return {
+      getMessage: async (messageId) => {
+        const detail = await this.getMessage(messageId)
+        return {
+          segments: asSegments(detail.message),
+          senderName: typeof detail.sender?.nickname === 'string' && detail.sender.nickname !== ''
+            ? detail.sender.nickname
+            : undefined,
+        }
+      },
+      fetchImage: (url) => this.downloadImage(url),
+      lookupNickname: (userId) => this.lookupNickname(userId),
+      ...this.describe === undefined ? {} : { describe: this.describe },
+      options: {
+        imageMode: this.config.forward.imageMode,
+        maxDepth: this.config.forward.maxDepth,
+        maxTotal: this.config.forward.maxTotal,
+        expandTimeoutMs: this.config.forward.expandTimeoutMs,
+      },
+    }
+  }
+
+  /**
+   * 下载图片并转 base64。
+   *
+   * 两道防线（都是旧版踩出来的）：
+   * 1. **校验 `Content-Type` 前缀是 `image/`** —— 图片 CDN 的 rkey 过期时返回的是
+   *    一个错误页而不是图片，不校验就会把 HTML 当图片喂给模型。
+   * 2. **校验大小** —— 超限直接放弃，不让一张原图撑爆内存。
+   * @param url - 图片地址。
+   * @returns base64 数据与 MIME 类型；任何一步失败都返回 undefined。
+   */
+  private async downloadImage(url: string): Promise<{ base64: string, mimeType: string } | undefined> {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(this.config.imageTimeoutMs) })
+      if (!response.ok) {
+        this.log('debug', `图片下载失败：HTTP ${response.status}`)
+        return undefined
+      }
+      const mimeType = (response.headers.get('content-type') ?? '').split(';')[0]?.trim() ?? ''
+      if (!mimeType.startsWith('image/')) {
+        this.log('debug', `图片 Content-Type 不是 image/*（${mimeType}），按失败处理`)
+        return undefined
+      }
+      const declared = Number(response.headers.get('content-length') ?? '0')
+      if (declared > this.config.imageMaxBytes) {
+        this.log('debug', `图片声明大小 ${declared} 超限，放弃`)
+        return undefined
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      if (bytes.byteLength > this.config.imageMaxBytes) {
+        this.log('debug', `图片实际大小 ${bytes.byteLength} 超限，放弃`)
+        return undefined
+      }
+      return { base64: Buffer.from(bytes).toString('base64'), mimeType }
+    } catch (error) {
+      this.log('debug', `图片下载异常：${describe(error)}`)
+      return undefined
+    }
+  }
+
+  /** 查昵称；查不到返回 undefined（调用方降级成 `user_id=xx`）。 */
+  private async lookupNickname(userId: string): Promise<string | undefined> {
+    if (userId === '' || userId === 'all') return undefined
+    const info = await this.getStrangerInfo(userId)
+    return typeof info.nickname === 'string' && info.nickname !== '' ? info.nickname : undefined
+  }
+
+  /**
+   * 注入图片描述器。
+   *
+   * 传 `undefined` 可以撤销。撤销后图片段仍会被解析，只是 `description` 为空。
+   * @param describer - 描述器；`undefined` 表示不描述。
+   */
+  setImageDescriber(describer: ImageDescriber | undefined): void {
+    this.describe = describer
   }
 
   // ────────────────────────── 日志 ──────────────────────────

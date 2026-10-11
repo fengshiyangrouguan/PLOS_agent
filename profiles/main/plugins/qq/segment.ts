@@ -155,8 +155,13 @@ export type ImageDescriber = (image: {
 
 /** 解析一条消息时的上下文——把适配器能力按需喂进来，而不是让本模块 import 适配器。 */
 export interface ResolveContext {
-  /** 取一条消息的详情（引用与转发展开用）。 */
-  getMessage: (messageId: string) => Promise<{ segments: ResolvedSegment[], senderName: string | undefined }>
+  /**
+   * 取一条消息的**原始**段与发送者名。
+   *
+   * 刻意返回原始段而不是 `ResolvedSegment[]`：解析是递归的，调用方（`segments.ts`）
+   * 需要自己决定子消息解析到哪一层。返回 `undefined` 表示查不到（调用方降级）。
+   */
+  getMessage: (messageId: string) => Promise<{ segments: import('./protocol.ts').Segment[], senderName: string | undefined } | undefined>
   /** 下载图片并转 base64；失败返回 undefined。 */
   fetchImage: (url: string) => Promise<{ base64: string, mimeType: string } | undefined>
   /** 查昵称；失败返回 undefined。 */
@@ -168,5 +173,7 @@ export interface ResolveContext {
     imageMode: 'skip' | 'first' | 'all'
     maxDepth: number
     maxTotal: number
+    /** 单次 `get_msg`（引用查询 / 转发展开）的超时（毫秒）。 */
+    expandTimeoutMs: number
   }
 }

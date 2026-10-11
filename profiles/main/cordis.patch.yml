@@ -46,3 +46,8 @@
         wsUrl: ws://127.0.0.1:3001
         accessToken: !!js "process.env.QQ_ACCESS_TOKEN ?? ''"
         selfId: ''
+
+    # 开发探针：把 qq/message 渲染成 LLM 文本打日志，用来验证流水线与当调用范例。
+    # 它 inject ['qq']，所以 qq-adapter 激活后才激活。
+    - id: qq-probe
+      name: './plugins/qq/probe.ts'

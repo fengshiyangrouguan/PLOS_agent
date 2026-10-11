@@ -64,6 +64,17 @@ export interface Config {
   }
   /** 单次 action 调用的响应超时（毫秒）。旧版是 30 秒。 */
   actionTimeoutMs: number
+  /** 图片下载超时（毫秒）。旧版 30 秒——注释实测「CDN 波动大，慢图可达 10s+」。 */
+  imageTimeoutMs: number
+  /**
+   * 单张图片字节上限；超过就放弃。
+   *
+   * 旧版留了个 TODO：「应在获取消息前加一个判断是否尺寸过大」。这里补上——
+   * 不设限的话一张原图能把内存和上下文一起撑爆。
+   */
+  imageMaxBytes: number
+  /** 已解析消息的缓存条数。防同一条消息被反复解析（每次都会重新下图片）。 */
+  resolveCacheSize: number
 }
 
 /** 配置校验。DSH 约定：插件内不放硬编码可调项，随部署变化的都从这里进。 */
@@ -90,4 +101,7 @@ export const Config: z<Config> = z.object({
     maxDelayMs: z.natural().default(30000),
   }).default({ initialDelayMs: 1000, maxDelayMs: 30000 }),
   actionTimeoutMs: z.natural().default(30000),
+  imageTimeoutMs: z.natural().default(30000),
+  imageMaxBytes: z.natural().default(8 * 1024 * 1024),
+  resolveCacheSize: z.natural().default(64),
 })

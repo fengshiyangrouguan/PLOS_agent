@@ -73,6 +73,11 @@ export function renderForwardBlock(block: ForwardBlock | undefined, indent: numb
   for (const message of block.messages) {
     const line = renderForwardSubMessage(message, indent + 1)
     if (line !== undefined) lines.push(line)
+    // 嵌套块必须在这里补出来：子消息的 `segments` 里刻意不含 forward 段
+    // （见 renderForwardSubMessage 的 continue），它单独挂在 `nested` 上。
+    if (message.nested !== undefined) {
+      lines.push(renderForwardBlock(message.nested, indent + 1))
+    }
   }
   if (block.truncated > 0) {
     lines.push(`${pad(indent + 1)}…（已达展开上限 ${block.messages.length + block.truncated} 条，其余省略）`)

@@ -1,0 +1,48 @@
+{
+  // 本目录下插件的静态解析配置（IDE 红波浪线 / `tsc -p` 用）。
+  //
+  // 运行时不读这个文件。DSH 的 launcher 有自己的运行时解析拦截，把
+  // `@deepseek-ai/dsh-*` / `@deepseek-ai/cordis` 路由到「安装的那一份」，
+  // 保证全树共享同一个 cordis 实例（见 README）。这里只是把同一批包告诉
+  // TypeScript，让它别再报 "Cannot find module"。
+  //
+  // 为什么用 extends + 覆写 paths：
+  //   - extends 只为了拿编译选项（target/moduleResolution/strict/skipLibCheck）；
+  //   - 子配置的 compilerOptions.paths 会**整体替换**父配置的 paths，所以不会
+  //     继承上游那 500 行指向 `src` 的映射——那会把 DSH 全部源码拖进本次检查，
+  //     而每个包依赖它自己的 tsconfig 选项（DSH 靠 project references 保证）。
+  //
+  // 指向的是**已构建的包目录**（artifact plane）：包自己的 package.json 声明了
+  // types 与 exports，所以子路径（如 @deepseek-ai/dsh-tools/types）也能解析。
+  // 依赖 `pnpm run build:lib:host` 的产物；未构建时这里会报找不到声明。
+  //
+  // 新增 import 了别的 DSH 包时，在下面的 paths 里补一行即可：
+  //   "@deepseek-ai/dsh-xxx": ["../../../deepseek-harness/packages/<组>/<包名>"]
+  "extends": "../../../deepseek-harness/tsconfig.base.json",
+  "compilerOptions": {
+    // base 是为 composite 增量构建设计的；我们只要类型检查。
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    // base 的 types: ["node"] 需要能解析到 @types/node；我们本地没有 node_modules。
+    "typeRoots": ["../../../deepseek-harness/node_modules/@types"],
+    "paths": {
+      "@deepseek-ai/cordis": ["../../../deepseek-harness/vendor/cordis"],
+      "@deepseek-ai/schemastery": ["../../../deepseek-harness/vendor/schemastery"],
+      "@deepseek-ai/dsh-tools": ["../../../deepseek-harness/packages/core/tools"],
+      "@deepseek-ai/dsh-system-prompt": ["../../../deepseek-harness/packages/core/system-prompt"],
+      "@deepseek-ai/dsh-session": ["../../../deepseek-harness/packages/core/session"],
+      "@deepseek-ai/dsh-session-projection": ["../../../deepseek-harness/packages/session/session-projection"],
+      "@deepseek-ai/dsh-agent": ["../../../deepseek-harness/packages/core/agent"],
+      "@deepseek-ai/dsh-agent-loop": ["../../../deepseek-harness/packages/core/agent-loop"],
+      "@deepseek-ai/dsh-llm": ["../../../deepseek-harness/packages/llm/llm"],
+      "@deepseek-ai/dsh-user-approval": ["../../../deepseek-harness/packages/interaction/user-approval"],
+      "@deepseek-ai/dsh-brand": ["../../../deepseek-harness/packages/util/brand"],
+      "@deepseek-ai/dsh-home-paths": ["../../../deepseek-harness/packages/util/home-paths"]
+    }
+  },
+  "include": ["plugins/**/*.ts"]
+}

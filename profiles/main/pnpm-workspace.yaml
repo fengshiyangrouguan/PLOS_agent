@@ -1,0 +1,15 @@
+# DSH 为「树外插件」规定的 pnpm 设置。改动前先读 README 与下面的理由。
+#
+# nodeLinker: hoisted
+#   给树外插件一个平铺的 node_modules，Node 原生解析才找得到。
+#
+# autoInstallPeers: false      ← 关键，不要去掉
+#   pnpm 默认会把 peerDependencies 也装进本地 node_modules。这里装了就多出一份
+#   cordis：插件注册的服务落在那一个实例上，而 DSH 的 agent-loop 在另一个实例上找，
+#   结果是 inject 永远等不到、fiber 永远停在 PENDING。
+#   关掉它，缺失的 peer 才会「漏」到安装的 DSH 上，全树共享同一个运行时。
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false

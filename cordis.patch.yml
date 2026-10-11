@@ -1,0 +1,5 @@
+# $DSH_HOME 级补丁层：应用于本 home 下的每一个 profile，优先级高于各 profile 自己的层。
+# 目前留空——单个 profile 的差异请写 profiles/<name>/cordis.patch.yml。
+#
+# 这里适合放"跨 profile 都要生效"的覆盖，例如统一关掉某项遥测、统一模型路由。
+[]

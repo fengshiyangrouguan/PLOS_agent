@@ -1,0 +1,16 @@
+# DSH 生成物：profile 根条目列表，每次启动由 dsh 重写。
+# 详见 README §"为什么是这个形状"。我们的差异写在 cordis.patch.yml。
+profiles/*/cordis.yml
+
+# pnpm / Node 产物
+node_modules/
+profiles/*/node_modules/
+
+# $DSH_HOME 运行时数据（不属于源码）
+.credentials.yaml
+.anonymous-user-id
+attachments/
+sessions/
+storages/
+logs/
+docs/

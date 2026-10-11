@@ -1,0 +1,2 @@
+# 全部文本统一 LF，避免 Windows 上每次 diff 都出现 CRLF 噪声。
+* text=auto eol=lf

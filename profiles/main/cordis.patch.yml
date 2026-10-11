@@ -1,0 +1,33 @@
+# 我们的补丁层：叠在 dsh.profile.bundles 的所有 bundle 层之上，后写者赢（按 id 逐行定位）。
+#
+# 两种操作：
+#   - insert: [...]        往树里加行（无 id 加到根列表，有 id 加进那个 group）
+#   - id: <已有行>  config: {...}   按 id 覆盖已有行的字段（config 是整块替换，不是深合并）
+#
+# 相对路径的基准是本目录（profiles/main/）。
+
+# 开启插件源码热重载。
+# dsh-base 里 hmr 的默认是 root: []（模块监视关闭）——补丁层对 config 是**整块替换**，
+# 所以这里要写完整。root 相对 baseDir 解析，而 baseDir = ctx.baseUrl = 本 profile 目录。
+# 效果：改 plugins/*.ts 会自动重载；不改则要重启进程。
+- id: hmr
+  config:
+    root: ['./plugins']
+
+- insert:
+    # 开发用：装上 cordis 的 console logger exporter。
+    # dsh-base 里没有这一行——不装的话 ctx.logger 的输出没有去处（logger 服务本身是
+    # cordis 核心，但 exporter 是独立插件）。级别：0=ERROR 1=INFO 2=WARN 3=DEBUG。
+    - id: logger-console
+      name: '@deepseek-ai/cordis-plugin-logger-console'
+      config:
+        levels:
+          default: 1
+
+    # 探针 A：只验证补丁层 → 装配树 → 模块加载 → 激活
+    - id: hello
+      name: './plugins/hello.ts'
+
+    # 探针 B：验证树外 bare import 解析 + inject 激活 + 服务注册
+    - id: probe-tools
+      name: './plugins/probe-tools.ts'

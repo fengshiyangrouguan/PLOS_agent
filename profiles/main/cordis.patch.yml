@@ -24,16 +24,42 @@
   config:
     path: !!js "process.env.USERPROFILE + '/.dsh/.credentials.yaml'"
 
-# 默认模型。`provider: deepseek-account` 是关键——走**账号平台**那条路线，
-# 正好对上 .credentials.yaml 里那三条 OAuth grant（deepseek-account-platform/*）。
-# 另一条 llm-deepseek-api-key 需要 sk- 形态的 key，这台机器上没有。
+# 默认模型。
 #
-# 这两行照抄本机 desktop profile 里已经跑通的配置，不是猜的。
-# 换成别的供应商（例如 SiliconFlow）时把 provider/model 换掉即可。
+# `provider: deepseek-official` 是 llm-deepseek-api-key 那条路线（PROVIDER 常量在
+# packages/llm/llm-deepseek-api-key/src/index.ts:15），它默认从环境变量
+# DEEPSEEK_API_KEY 取 key（config.ts:16 的 apiKeyEnv 默认值就是这个名字）。
+#
+# 之前用的是 `deepseek-account`（账号平台 OAuth grant）。实测那条路走不通：
+# 常驻会话的 turn 正常跑完、上下文也装配好了（投影缓存里 toolsTokens=5872），
+# 但 tokenUsage.totals 全为 0 —— 模型调用没拿到响应。
+#
+# key 值在 $DSH_HOME/.env（已 gitignore），不在这里。
 - id: agent-default-model
   config:
-    provider: deepseek-account
+    provider: deepseek-official
     model: deepseek-flash
+
+# 禁掉 DeepSeek 的请求扩展插件 —— **这是绕过，不是修复**。
+#
+# 症状：启用时每一次模型调用都以
+#   finish{reason:{kind:'error',failure:{code:'REQUEST_EXTENSION',
+#          message:'DeepSeek request extension preparation failed'}}}
+# 结束，且 tokenUsage.totals 全为 0。表现是"agent 那一轮正常跑完但什么都没发生"。
+#
+# 定位过程（每一步都留了工具，不是猜的）：
+#   1. plugins/qq/probe-llm.ts 直连 ctx.llm.stream()，绕开整个 agent
+#   2. 最初拿到 NO_ADAPTER —— 但那是竞态假象：探针在树装配完成前就跑了，
+#      而 provider 是别的插件在它自己的 apply 里注册的。延迟 20s 后错误才现出真身
+#   3. 禁用本插件后立刻成功：finish{kind:'stop'} + 66 个 chunk（含 usage）
+#
+# 它做的是"插件贡献的附加请求字段"（plugin-contributed request fields），
+# 会遍历 Loader 里的插件包清单。我们的 profile 插件是**相对路径的 .ts 文件、
+# 不是 npm 包**，很可能就是这里炸的原因 —— 但真正的原因还没查实。
+#
+# TODO：查明真正原因后恢复本行。届时把这条 disable 删掉即可。
+- id: deepseek-llm-api-extensions
+  disabled: true
 
 - insert:
     # 开发用：装上 cordis 的 console logger exporter。
@@ -109,3 +135,8 @@
     # 就没人看得见她。没有这一层，实测她收到推送后只在会话里"回答"，群里毫无动静。
     - id: qq-prompt
       name: './plugins/qq/prompt.ts'
+
+    # 模型链路自检：默认关闭（QQ_LLM_PROBE=1 才跑）。绕过整个 agent 直接调
+    # ctx.llm.stream()，用来分离"能力层（provider/凭证/网络）"与"会话层"的故障。
+    - id: qq-probe-llm
+      name: './plugins/qq/probe-llm.ts'

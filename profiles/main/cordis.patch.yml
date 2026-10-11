@@ -14,6 +14,16 @@
   config:
     root: ['./plugins']
 
+# 凭证走**本机 DSH 的那一份**（C:\Users\<你>\.dsh\.credentials.yaml），而不是复制一份到
+# $DSH_HOME：复制会过期，而且轮换后两边会不一致。里面是 DeepSeek 账号平台的 OAuth grant，
+# 由下面的 llm-deepseek-account 消费。
+#
+# 用 USERPROFILE 拼路径而不是写死绝对路径，免得这台机器的用户名进版本库。
+# 想换成独立凭证库，把 path 改掉或删掉这一节（删掉则回到 $DSH_HOME/.credentials.yaml）。
+- id: credentials
+  config:
+    path: !!js "process.env.USERPROFILE + '/.dsh/.credentials.yaml'"
+
 - insert:
     # 开发用：装上 cordis 的 console logger exporter。
     # dsh-base 里没有这一行——不装的话 ctx.logger 的输出没有去处（logger 服务本身是

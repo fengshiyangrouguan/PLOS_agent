@@ -62,3 +62,12 @@
     # 发消息类工具会自动撤回。
     - id: qq-probe-tools
       name: './plugins/qq/probe-tools.ts'
+
+    # 「推」：把 QQ 消息变成 user 消息推进白羽的上下文并唤醒她（followup）。
+    # 默认 trigger=mention —— 只有 @ 白羽 才推。改成 all 之前想清楚：
+    # 那意味着她在所有群里对每条消息开口（包括那个 332 人的群）。
+    - id: qq-push
+      name: './plugins/qq/push.ts'
+      config:
+        trigger: mention
+        groups: []

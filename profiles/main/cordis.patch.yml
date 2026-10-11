@@ -104,3 +104,8 @@
         sessionId: plos-baiyu
         cwd: ''
         greeting: !!js "process.env.QQ_RESIDENT_GREETING ?? ''"
+
+    # 系统提示词段落（三层里的第③层）：告诉白羽她在 QQ 上、以及不调 qq_send_message
+    # 就没人看得见她。没有这一层，实测她收到推送后只在会话里"回答"，群里毫无动静。
+    - id: qq-prompt
+      name: './plugins/qq/prompt.ts'

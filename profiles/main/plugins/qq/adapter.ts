@@ -26,6 +26,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { Config as ConfigSchema, type Config } from './config.ts'
+import { MessageBuffer } from './buffer.ts'
 import { renderSegments } from './render.ts'
 import { resolveMessage } from './segments.ts'
 import type { ImageDescriber, ResolveContext, ResolvedSegment } from './segment.ts'
@@ -191,6 +192,15 @@ export class QqAdapter extends Service {
   private readonly resolveCache = new Map<string, ResolvedSegment[]>()
 
   /**
+   * 消息缓冲：推/拉两条路的共同地基。
+   *
+   * 适配器是**唯一写入方**（消息到达时 push），读取由上层决定（`drain` 推进游标，
+   * `peek` 不推进）。适配器自己**不消费**这个缓冲——"要不要看、看了算不算读过"
+   * 是策略，属于推/拉那一层。
+   */
+  private readonly buffer: MessageBuffer
+
+  /**
    * 可选的图片描述器（VLM）。
    *
    * **适配器自己不实现它**，只提供注入点（`setImageDescriber`）。理由：实现它需要
@@ -217,6 +227,7 @@ export class QqAdapter extends Service {
     this.config = config
     this.wsFactory = resolveWebSocket()
     this.reconnectDelay = config.reconnect.initialDelayMs
+    this.buffer = new MessageBuffer(config.buffer)
 
     // 连接是资源：创建处返回清理，插件卸载（或依赖变化）时自动断开。
     ctx.effect(() => {
@@ -447,6 +458,8 @@ export class QqAdapter extends Service {
       groupName: typeof event.peerName === 'string' && event.peerName !== '' ? event.peerName : undefined,
       raw: event,
     }
+    // 入缓冲，再广播。顺序要紧：监听器里读缓冲时必须已经能看到这一条。
+    this.buffer.push(incoming)
     // debug 级：开发时用来看"消息到底进没进来"。级别在补丁层的 logger-console 里调。
     this.log('debug', `收到${isGroup ? `群 ${groupId ?? '?'}` : `私聊 ${userId}`}消息`
       + `（${segments.length} 段，msg_id=${incoming.messageId}`
@@ -656,6 +669,55 @@ export class QqAdapter extends Service {
    */
   async render(incoming: QqIncoming): Promise<string> {
     return renderSegments(await this.resolve(incoming))
+  }
+
+  // ────────────────────────── 消息缓冲的读取面 ──────────────────────────
+  //
+  // 适配器只写缓冲，**不决定谁读、读了算不算数**——那是推/拉那一层的策略。
+  // 这四个方法就是那一层需要的全部。
+
+  /**
+   * 已知会话键（`group:<id>` / `private:<id>`），最久未活动的在前。
+   * @returns 会话键列表。
+   */
+  conversations(): string[] {
+    return this.buffer.known()
+  }
+
+  /**
+   * 某会话的未读条数。
+   * @param conversation - 会话键。
+   * @returns 游标之后的消息数。
+   */
+  unread(conversation: string): number {
+    return this.buffer.unread(conversation)
+  }
+
+  /**
+   * 只看不推进游标 —— 用于"偷看一眼"而不算已读。
+   * @param conversation - 会话键。
+   * @param limit - 最多几条（取最近的）。
+   * @returns 未读消息，按时间升序。
+   */
+  peek(conversation: string, limit?: number): QqIncoming[] {
+    return this.buffer.peek(conversation, limit)
+  }
+
+  /**
+   * 取增量并**推进游标** —— "拉"的语义：读过就算看过了。
+   * @param conversation - 会话键。
+   * @returns 未读消息，按时间升序。
+   */
+  drain(conversation: string): QqIncoming[] {
+    return this.buffer.drain(conversation)
+  }
+
+  /**
+   * 把所有保留的消息重新算未读。
+   * @param conversation - 会话键。
+   */
+  rewind(conversation: string): void {
+    this.buffer.rewind(conversation)
   }
 
   /** 装解析结果，超出上限就丢最旧的。 */

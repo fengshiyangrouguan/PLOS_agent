@@ -75,6 +75,13 @@ export interface Config {
   imageMaxBytes: number
   /** 已解析消息的缓存条数。防同一条消息被反复解析（每次都会重新下图片）。 */
   resolveCacheSize: number
+  /** 消息缓冲：推/拉两条路的共同地基。见 `buffer.ts`。 */
+  buffer: {
+    /** 每个会话保留的条数上限。 */
+    perConversation: number
+    /** 保留的会话数上限；超出按最久未活动淘汰。 */
+    conversations: number
+  }
 }
 
 /** 配置校验。DSH 约定：插件内不放硬编码可调项，随部署变化的都从这里进。 */
@@ -104,4 +111,8 @@ export const Config: z<Config> = z.object({
   imageTimeoutMs: z.natural().default(30000),
   imageMaxBytes: z.natural().default(8 * 1024 * 1024),
   resolveCacheSize: z.natural().default(64),
+  buffer: z.object({
+    perConversation: z.natural().min(1).default(50),
+    conversations: z.natural().min(1).default(32),
+  }).default({ perConversation: 50, conversations: 32 }),
 })

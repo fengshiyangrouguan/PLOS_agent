@@ -57,7 +57,8 @@
     - id: qq-tools
       name: './plugins/qq/tools.ts'
 
-    # 发送链路自检：默认关闭，QQ_SEND_TEST=1 且给出 QQ_SEND_TEST_TARGET 才真的发消息。
-    # 它会往群里发一句再撤回——目标群必须是"发错了也没关系"的。
-    - id: qq-probe-send
-      name: './plugins/qq/probe-send.ts'
+    # 工具调用自检：默认关闭，QQ_TOOL_TEST=<工具名> 才真的调用。
+    # 走 ctx.tools.execute 而非直接调服务——只有经过完整工具管道才算验证了工具定义。
+    # 发消息类工具会自动撤回。
+    - id: qq-probe-tools
+      name: './plugins/qq/probe-tools.ts'

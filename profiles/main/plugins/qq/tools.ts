@@ -80,6 +80,7 @@ const REGISTERED_TOOLS = [
   'qq_read_message',
   'qq_list_group_members',
   'qq_recall_message',
+  'qq_check_messages',
 ] as const
 
 /**
@@ -340,6 +341,118 @@ export function apply(ctx: Context): void {
       try {
         await ctx.qq.deleteMessage(args.message_id)
         return { ok: true }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  // ── 主动查看消息（"拉"）─────────────────────────────────────────────
+  ctx.tools.register(defineTool({
+    name: 'qq_check_messages',
+    description: [
+      'Look at QQ messages that arrived and have not been seen yet.',
+      'Call it with no arguments to see which conversations have unread messages and how many.',
+      'Call it with a "conversation" to read that conversation\'s unread messages and mark them read.',
+      'Reading marks messages as seen unless mark_read is false, so the next call returns only what is new.',
+    ].join(' '),
+    parameters: {
+      conversation: {
+        type: 'string',
+        description: 'Conversation to read, as "group:<group id>" or "private:<user id>". Omit to list unread counts instead.',
+      },
+      limit: {
+        type: 'integer',
+        description: 'Maximum messages to return per conversation. Defaults to 20. Rendering images and forwards costs work, so raise it deliberately.',
+      },
+      mark_read: {
+        type: 'boolean',
+        description: 'Whether reading advances the seen cursor. Defaults to true. Set false to look without marking as read.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          conversations: {
+            type: 'array',
+            description: 'Unread overview, present when no conversation was named.',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                conversation: { type: 'string', required: true },
+                unread: { type: 'integer', required: true },
+              },
+            },
+          },
+          messages: {
+            type: 'array',
+            description: 'Read messages, present when a conversation was named.',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                conversation: { type: 'string', required: true },
+                messageId: { type: 'string', required: true },
+                senderName: { type: 'string', required: true },
+                text: { type: 'string', required: true },
+                mentionsSelf: { type: 'boolean', required: true },
+              },
+            },
+          },
+          reason: { type: 'string' },
+        },
+      },
+      render: (_args, value) => {
+        if (!value.ok) return [{ type: 'text', text: `Check failed: ${value.reason ?? 'unknown reason'}` }]
+        const conversations = value.conversations ?? []
+        if (conversations.length > 0) {
+          return [{
+            type: 'text',
+            text: conversations.map(item => `${item.conversation}: ${String(item.unread)} unread`).join('\n'),
+          }]
+        }
+        const messages = value.messages ?? []
+        if (messages.length === 0) return [{ type: 'text', text: 'No unseen messages.' }]
+        return [{
+          type: 'text',
+          text: messages
+            .map(item => `[${item.conversation}] ${item.senderName}${item.mentionsSelf ? ' (mentioned you)' : ''}: ${item.text}`)
+            .join('\n'),
+        }]
+      },
+    },
+    async execute(args) {
+      const limit = args.limit ?? 20
+
+      // 概览模式：没给会话就只报未读数，不拉正文——那才是"打开手机看一眼"。
+      if (args.conversation === undefined || args.conversation === '') {
+        const conversations = ctx.qq.conversations()
+          .map(conversation => ({ conversation, unread: ctx.qq.unread(conversation) }))
+          .filter(item => item.unread > 0)
+        return { ok: true, conversations }
+      }
+
+      try {
+        // `peek` 不推进游标，`drain` 推进——这就是"看"与"读过"的区别。
+        const unseen = args.mark_read === false
+          ? ctx.qq.peek(args.conversation, limit)
+          : ctx.qq.drain(args.conversation).slice(-limit)
+        // 顺序渲染而不是并行：一条消息可能触发图片下载，并发起来会把协议端和网络一起打满。
+        const messages = []
+        for (const incoming of unseen) {
+          messages.push({
+            conversation: args.conversation,
+            messageId: incoming.messageId,
+            senderName: incoming.senderName,
+            text: await ctx.qq.render(incoming),
+            mentionsSelf: incoming.mentionsSelf,
+          })
+        }
+        return { ok: true, messages }
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }
       }

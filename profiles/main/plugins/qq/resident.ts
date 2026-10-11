@@ -31,6 +31,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+// 副作用式类型导入：把 `agentDefaultModel` 注册到 Context 上。不 import 就没有这个属性
+// （DSH 的声明合并在各自的包里，得有人先把它拉进编译单元）。
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 
@@ -47,7 +50,7 @@ export const name = 'qq-resident'
  * 这是实测踩出来的：日志时间线显示 apply 跑在 `hmr watching` 之前。
  * 靠依赖声明约束顺序，比轮询等工厂出现可靠。
  */
-export const inject = ['agents', 'agentLoop']
+export const inject = ['agents', 'agentLoop', 'agentDefaultModel']
 
 /** 配置。 */
 export interface Config {
@@ -93,9 +96,18 @@ export function apply(ctx: Context, config: Config): void {
     let disposed = false
 
     const creating = (async (): Promise<void> => {
+      // 模型从 `agent-default-model` 那一行读，不在这里再配一份——单一真相源。
+      // 不给 agentOptions 的话这个会话**没有模型**，那一轮根本构造不出请求：
+      // 表面看是"收到消息没反应"，实际是压根没发出去过。
+      const selection = ctx.agentDefaultModel.currentSelection()
       const created = await ctx.agents.create({
         sessionId: SessionId(config.sessionId),
         ...config.cwd === '' ? {} : { meta: { cwd: config.cwd } },
+        agentOptions: {
+          provider: selection.provider,
+          model: selection.model,
+          ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
+        },
       })
       // 卸载可能发生在创建返回之前：这时不要留下没人管的会话。
       if (disposed) {
@@ -110,6 +122,13 @@ export function apply(ctx: Context, config: Config): void {
           content: [{ type: 'text', text: config.greeting }],
           source: { kind: 'qq-resident', sessionId: config.sessionId },
         }))
+        // 诊断：`followup` 之后那一轮到底有没有跑起来。表面症状是"推了但没反应"，
+        // 分不清是没唤醒、唤醒后卡住、还是模型调用静默失败——status 能把这三种分开。
+        const agent = created.agent
+        ctx.logger.info(`qq-resident: 已推入 greeting，status=${String(agent.status)}`)
+        setTimeout(() => {
+          ctx.logger.info(`qq-resident: 6s 后 status=${String(agent.status)}`)
+        }, 6000)
       }
     })().catch((error: unknown) => {
       // 创建失败要吼出来：这等于白羽根本不在，而 QQ 侧一切看起来都正常。

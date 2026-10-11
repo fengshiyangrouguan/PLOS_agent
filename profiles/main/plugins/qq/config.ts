@@ -1,0 +1,93 @@
+/**
+ * `qq` 能力 seam 的配置面。
+ *
+ * 迁移自实验期的 `platform/sources/qq_napcat/config_schema.py`，但有两处**刻意的差异**：
+ *
+ * 1. 旧版适配器是 **WebSocket 服务端**（NapCat 反向连入，默认 :8080）。SnowLuma 是标准的
+ *    OneBot v11 协议端，默认由我们**主动连入**它的 WS 服务端（默认 :3001）。所以这里配的是
+ *    `wsUrl`（要连的地址）而不是 `host`/`port`（要监听的地址）。
+ * 2. 过滤名单沿用旧版的语义：默认 **blacklist + 空表 = 放行一切**。这是刻意的——自动生成的
+ *    配置不应该默认拒绝所有消息（旧版注释里明确记过这条）。
+ */
+
+import z from '@deepseek-ai/schemastery'
+
+/** 名单模式。`blacklist` + 空表 = 放行一切。 */
+export type ListMode = 'whitelist' | 'blacklist'
+
+/** 转发（合并转发 / 聊天记录）内图片的处理方式。 */
+export type ForwardImageMode = 'skip' | 'first' | 'all'
+
+/** `ctx.qq` 的配置。 */
+export interface Config {
+  /** OneBot v11 WebSocket 服务端地址（SnowLuma 暴露的那个）。 */
+  wsUrl: string
+  /** `access_token`；空串表示不启用鉴权。 */
+  accessToken: string
+  /**
+   * 本机器人自身的 QQ 号 —— **兜底值，通常留空**。
+   *
+   * 适配器连上后会自己调 `get_login_info` 拿到真实 QQ 并用它做 `AT_ME` 判定；
+   * 这个字段只在"还没连上就收到消息"这种边缘情况下兜底。
+   *
+   * 旧版踩过坑——一边是 int 一边是 str 会比不中，所以这里统一用 string，不提供数字形态。
+   */
+  selfId: string
+  /** 群消息过滤。 */
+  groups: {
+    mode: ListMode
+    /** 群号列表（字符串，与 OneBot 的 `group_id` 直接比较）。 */
+    list: string[]
+  }
+  /** 私聊消息过滤。 */
+  private: {
+    mode: ListMode
+    list: string[]
+  }
+  /** 合并转发的展开参数。 */
+  forward: {
+    /** 转发内图片：`skip` 不下载 / `first` 只下整棵树的第一张 / `all` 全下。 */
+    imageMode: ForwardImageMode
+    /** 嵌套转发最大深度。 */
+    maxDepth: number
+    /** 展开总条数上限（跨嵌套共享一个计数器）。 */
+    maxTotal: number
+    /** 单次 `get_msg` 展开的超时（毫秒）。旧版是 5 秒。 */
+    expandTimeoutMs: number
+  }
+  /** WebSocket 重连参数。 */
+  reconnect: {
+    /** 首次重连延迟（毫秒）。 */
+    initialDelayMs: number
+    /** 延迟上限（毫秒）。 */
+    maxDelayMs: number
+  }
+  /** 单次 action 调用的响应超时（毫秒）。旧版是 30 秒。 */
+  actionTimeoutMs: number
+}
+
+/** 配置校验。DSH 约定：插件内不放硬编码可调项，随部署变化的都从这里进。 */
+export const Config: z<Config> = z.object({
+  wsUrl: z.string().default('ws://127.0.0.1:3001'),
+  accessToken: z.string().default(''),
+  selfId: z.string().default(''),
+  groups: z.object({
+    mode: z.union(['whitelist', 'blacklist'] as const).default('blacklist'),
+    list: z.array(z.string()).default([]),
+  }).default({ mode: 'blacklist', list: [] }),
+  private: z.object({
+    mode: z.union(['whitelist', 'blacklist'] as const).default('blacklist'),
+    list: z.array(z.string()).default([]),
+  }).default({ mode: 'blacklist', list: [] }),
+  forward: z.object({
+    imageMode: z.union(['skip', 'first', 'all'] as const).default('skip'),
+    maxDepth: z.natural().min(1).default(3),
+    maxTotal: z.natural().min(1).default(50),
+    expandTimeoutMs: z.natural().default(5000),
+  }).default({ imageMode: 'skip', maxDepth: 3, maxTotal: 50, expandTimeoutMs: 5000 }),
+  reconnect: z.object({
+    initialDelayMs: z.natural().default(1000),
+    maxDelayMs: z.natural().default(30000),
+  }).default({ initialDelayMs: 1000, maxDelayMs: 30000 }),
+  actionTimeoutMs: z.natural().default(30000),
+})

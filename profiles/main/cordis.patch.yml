@@ -31,3 +31,13 @@
     # 探针 B：验证树外 bare import 解析 + inject 激活 + 服务注册
     - id: probe-tools
       name: './plugins/probe-tools.ts'
+
+    # QQ 能力 seam：OneBot v11 WebSocket 客户端，连 SnowLuma 的协议端。
+    # 连不上会按退避重连，不阻塞装配——所以协议端还没起来也能正常启动。
+    # provide('qq')，供 qq-tools 调用。
+    - id: qq-adapter
+      name: './plugins/qq/adapter.ts'
+      config:
+        wsUrl: ws://127.0.0.1:3001
+        accessToken: ''
+        selfId: ''

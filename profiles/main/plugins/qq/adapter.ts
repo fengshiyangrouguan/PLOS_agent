@@ -333,6 +333,9 @@ export class QqAdapter extends Service {
       return
     }
     if (meta.meta_event_type !== 'heartbeat') return
+    // 心跳每 ~30s 一次：既是判活依据，也是 stdout 的定期 flush 点
+    // （node 的 stdout 接管道时会缓冲，长时间无输出就看把日志停在半路）。
+    this.log('debug', `心跳（interval=${String(meta.interval ?? '?')}ms）`)
     // 旧版教训：只有 online && good 才算活着，否则主动断开触发重连。
     const healthy = meta.status?.online === true && meta.status?.good === true
     if (!healthy) {
@@ -429,6 +432,10 @@ export class QqAdapter extends Service {
       groupName: typeof event.peerName === 'string' && event.peerName !== '' ? event.peerName : undefined,
       raw: event,
     }
+    // debug 级：开发时用来看"消息到底进没进来"。级别在补丁层的 logger-console 里调。
+    this.log('debug', `收到${isGroup ? `群 ${groupId ?? '?'}` : `私聊 ${userId}`}消息`
+      + `（${segments.length} 段，msg_id=${incoming.messageId}`
+      + `${mentionsSelf ? '，@了我' : ''}）`)
     this.ctx.emit('qq/message', incoming)
   }
 

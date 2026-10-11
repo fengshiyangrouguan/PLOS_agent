@@ -23,6 +23,8 @@
       config:
         levels:
           default: 1
+          # 开发期看 qq-adapter 的连接与收消息细节；上线前调回 1。
+          qq-adapter: 3
 
     # 探针 A：只验证补丁层 → 装配树 → 模块加载 → 激活
     - id: hello
@@ -35,9 +37,12 @@
     # QQ 能力 seam：OneBot v11 WebSocket 客户端，连 SnowLuma 的协议端。
     # 连不上会按退避重连，不阻塞装配——所以协议端还没起来也能正常启动。
     # provide('qq')，供 qq-tools 调用。
+    #
+    # accessToken 从环境变量取，**不落进版本库**：值写在 $DSH_HOME/.env
+    # （已被 .gitignore 忽略），DSH 启动时经 loadLayeredEnv 的 user 层注入。
     - id: qq-adapter
       name: './plugins/qq/adapter.ts'
       config:
         wsUrl: ws://127.0.0.1:3001
-        accessToken: ''
+        accessToken: !!js "process.env.QQ_ACCESS_TOKEN ?? ''"
         selfId: ''

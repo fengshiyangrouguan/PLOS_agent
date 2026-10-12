@@ -153,3 +153,7 @@
     # ctx.llm.stream()，用来分离"能力层（provider/凭证/网络）"与"会话层"的故障。
     - id: qq-probe-llm
       name: './plugins/qq/probe-llm.ts'
+
+    # 可行性验证：fork 快照 + 三阶段合并。QQ_FORK_PROBE=1 才跑。
+    - id: qq-probe-fork
+      name: './plugins/qq/probe-fork.ts'

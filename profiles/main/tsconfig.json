@@ -35,6 +35,7 @@
       "@deepseek-ai/dsh-tools": ["../../../deepseek-harness/packages/core/tools"],
       "@deepseek-ai/dsh-system-prompt": ["../../../deepseek-harness/packages/core/system-prompt"],
       "@deepseek-ai/dsh-session": ["../../../deepseek-harness/packages/core/session"],
+      "@deepseek-ai/dsh-session/fork": ["../../../deepseek-harness/packages/core/session/lib/types/fork.d.ts"],
       "@deepseek-ai/dsh-session-projection": ["../../../deepseek-harness/packages/session/session-projection"],
       "@deepseek-ai/dsh-agent": ["../../../deepseek-harness/packages/core/agent"],
       "@deepseek-ai/dsh-agent-default-model": ["../../../deepseek-harness/packages/core/agent-default-model"],

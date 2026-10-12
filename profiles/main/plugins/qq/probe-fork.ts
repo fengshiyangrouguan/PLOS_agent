@@ -144,6 +144,24 @@ async function run(ctx: Context): Promise<void> {
     const mLog = m.agent.session.snapshotEvents()
     log(`✅ 合并会话建成：${String(mLog.length)} 个事件 | ${summarize(mLog)}`)
     log(`✅ 合并后 surface nodes=${String(m.agent.session.surface.nodes.length)}`)
+
+    // ── 6. 最后一关：seeded 会话能不能 resume ────────────────────────
+    // 合并产物是 isSeeded=true 的会话。进程重启后要把它接回来，就得 resume 一个
+    // seeded session。这一条不通，整套抢占式设计在重启后就断了。
+    log('— 测 resume seeded 会话 —')
+    await m.dispose()
+    log('已 dispose 合并 agent')
+    // 等持久化落盘
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    try {
+      const resumed = await ctx.agents.resume({ resumeSessionId: idM, agentOptions })
+      const rLog = resumed.agent.session.snapshotEvents()
+      log(`✅ resume 成功：${String(rLog.length)} 个事件 | surface nodes=${String(resumed.agent.session.surface.nodes.length)}`)
+      log(`   inheritedEventCount=${String(resumed.agent.session.inheritedEventCount)}`)
+      log(`   log 摘要：${summarize(rLog)}`)
+    } catch (error) {
+      log(`❌ resume 失败：${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`)
+    }
   } catch (error) {
     log(`❌ 合并失败：${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`)
   }

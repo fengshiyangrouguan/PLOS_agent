@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "dependencies": {},
+  "dependencies": {
+    "@deepseek-ai/cordis-plugin-logger-console": "link:..\\..\\..\\deepseek-harness\\vendor\\logger-console"
+  },
   "dsh": {
     "profile": {
       "bundles": [

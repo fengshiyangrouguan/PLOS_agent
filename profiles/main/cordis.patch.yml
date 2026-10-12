@@ -40,7 +40,7 @@
     provider: deepseek-official
     model: deepseek-flash
 
-# 请求扩展插件：**仍处于禁用**，但原因已查实（不再是盲目的绕过）。
+# 请求扩展插件：已恢复启用。曾经的 REQUEST_EXTENSION 已真正修好（见下）。
 #
 # 真正的元凶是 logger-console 那一行的**裸包名解析失败**：
 # plugin-package-inventory-deepseek 要为每个活跃 Loader 条目找出"所属包"
@@ -73,8 +73,6 @@
 #   b) 换一个能解析到的 logger exporter
 #   c) 查清 vendored cordis 插件为何不进安装作用域（根因，最彻底）
 # 修好后删掉下面这条 disable，并恢复 logger-console 那一行。
-- id: deepseek-llm-api-extensions
-  disabled: true
 
 - insert:
     # 开发用：装上 cordis 的 console logger exporter。

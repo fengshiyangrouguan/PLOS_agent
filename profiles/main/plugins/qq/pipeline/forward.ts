@@ -25,7 +25,7 @@
 
 import { faceToText } from './face.ts'
 import { parseJsonCard } from './card.ts'
-import type { Segment } from './protocol.ts'
+import type { Segment } from '../protocol/index.ts'
 import type { ForwardBlock, ForwardSubMessage, ImageDescriber, ResolvedImage, ResolvedSegment } from './segment.ts'
 
 /** 转发内出现 `reply` 段时的占位。 */

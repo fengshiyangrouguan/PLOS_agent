@@ -35,7 +35,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { QqIncoming } from './adapter.ts'
+import type { QqIncoming } from '../adapter/index.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -45,7 +45,7 @@ declare module '@deepseek-ai/dsh-llm' {
 }
 
 /** 插件名。 */
-export const name = 'qq-push'
+export const name = 'qq-attention'
 
 /** 依赖 `qq`（消息来源）与 `agents`（投递目标）。 */
 export const inject = ['qq', 'agents']
@@ -135,13 +135,13 @@ export function apply(ctx: Context, config: Config): void {
     if (config.sessionId !== '') {
       const agent = ctx.agents.list().find(candidate => candidate.id === config.sessionId)
       if (agent === undefined) {
-        ctx.logger.warn(`qq-push: 配置的 sessionId "${config.sessionId}" 不在册，跳过投递`)
+        ctx.logger.warn(`qq-attention: 配置的 sessionId "${config.sessionId}" 不在册，跳过投递`)
       }
       return agent
     }
     const all = ctx.agents.list()
     if (all.length === 1) return all[0]
-    ctx.logger.warn(`qq-push: 期望恰好一个 agent，实际 ${String(all.length)} 个；请配 sessionId`)
+    ctx.logger.warn(`qq-attention: 期望恰好一个 agent，实际 ${String(all.length)} 个；请配 sessionId`)
     return undefined
   }
 
@@ -191,7 +191,7 @@ export function apply(ctx: Context, config: Config): void {
 
     state.lastWokenAt = Date.now()
     pending.delete(conversation)
-    ctx.logger.info(`qq-push: 已推入 ${String(rendered.length)} 条（${conversation}），唤醒 ${agent.id}`)
+    ctx.logger.info(`qq-attention: 已推入 ${String(rendered.length)} 条（${conversation}），唤醒 ${agent.id}`)
   }
 
   /** 判断一条消息该不该触发推送。 */
@@ -236,6 +236,6 @@ export function apply(ctx: Context, config: Config): void {
   // 投递目标不在册是最容易踩的坑（headless 启动没有 agent），启动时报一次比事后猜强。
   const roster = ctx.agents.list()
   ctx.logger.info(roster.length === 0
-    ? 'qq-push: 当前没有在册 agent —— 有消息也无人可推（headless 启动不会创建 agent）'
-    : `qq-push: 当前在册 agent ${String(roster.length)} 个：${roster.map(agent => agent.id).join(', ')}`)
+    ? 'qq-attention: 当前没有在册 agent —— 有消息也无人可推（headless 启动不会创建 agent）'
+    : `qq-attention: 当前在册 agent ${String(roster.length)} 个：${roster.map(agent => agent.id).join(', ')}`)
 }

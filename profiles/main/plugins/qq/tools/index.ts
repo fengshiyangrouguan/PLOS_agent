@@ -28,7 +28,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { QqActionError, type QqTarget } from './adapter.ts'
+import { QqActionError, type QqTarget } from '../adapter/index.ts'
 
 /** 插件名。 */
 export const name = 'qq-tools'

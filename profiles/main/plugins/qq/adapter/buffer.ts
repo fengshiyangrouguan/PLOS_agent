@@ -32,7 +32,7 @@
  * @module qq/buffer
  */
 
-import type { QqIncoming } from './adapter.ts'
+import type { QqIncoming } from './index.ts'
 
 /** 缓冲里的一条消息。 */
 interface Entry {

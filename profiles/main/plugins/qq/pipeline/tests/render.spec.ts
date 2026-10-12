@@ -22,8 +22,8 @@
  */
 
 import assert from 'node:assert/strict'
-import { renderSegments, renderForwardBlock } from './render.ts'
-import type { ForwardBlock, ResolvedSegment } from './segment.ts'
+import { renderSegments, renderForwardBlock } from '../render.ts'
+import type { ForwardBlock, ResolvedSegment } from '../segment.ts'
 
 let passed = 0
 let failed = 0

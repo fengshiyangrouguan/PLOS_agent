@@ -161,7 +161,7 @@ export interface ResolveContext {
    * 刻意返回原始段而不是 `ResolvedSegment[]`：解析是递归的，调用方（`segments.ts`）
    * 需要自己决定子消息解析到哪一层。返回 `undefined` 表示查不到（调用方降级）。
    */
-  getMessage: (messageId: string) => Promise<{ segments: import('./protocol.ts').Segment[], senderName: string | undefined } | undefined>
+  getMessage: (messageId: string) => Promise<{ segments: import('../protocol/index.ts').Segment[], senderName: string | undefined } | undefined>
   /** 下载图片并转 base64；失败返回 undefined。 */
   fetchImage: (url: string) => Promise<{ base64: string, mimeType: string } | undefined>
   /** 查昵称；失败返回 undefined。 */

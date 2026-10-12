@@ -27,9 +27,9 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { MessageBuffer } from './buffer.ts'
-import { renderSegments } from './render.ts'
-import { resolveMessage } from './segments.ts'
-import type { ImageDescriber, ResolveContext, ResolvedSegment } from './segment.ts'
+import { renderSegments } from '../pipeline/render.ts'
+import { resolveMessage } from '../pipeline/segments.ts'
+import type { ImageDescriber, ResolveContext, ResolvedSegment } from '../pipeline/segment.ts'
 import {
   asSegments,
   echoId,
@@ -43,7 +43,7 @@ import {
   type RawEvent,
   type Segment,
   type StrangerInfo,
-} from './protocol.ts'
+} from '../protocol/index.ts'
 
 // ────────────────────────────── 对外类型 ──────────────────────────────
 

@@ -16,8 +16,8 @@
  */
 
 import assert from 'node:assert/strict'
-import { MessageBuffer, conversationOf, parseConversation } from './buffer.ts'
-import type { QqIncoming } from './adapter.ts'
+import { MessageBuffer, conversationOf, parseConversation } from '../buffer.ts'
+import type { QqIncoming } from '../index.ts'
 
 let passed = 0
 let failed = 0

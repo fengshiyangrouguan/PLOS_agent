@@ -16,7 +16,7 @@
 import { parseJsonCard } from './card.ts'
 import { faceToText } from './face.ts'
 import { ForwardExpander, extractForwardXml } from './forward.ts'
-import type { RawEvent, Segment } from './protocol.ts'
+import type { RawEvent, Segment } from '../protocol/index.ts'
 import type {
   ResolveContext,
   ResolvedImage,

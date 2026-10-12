@@ -86,74 +86,72 @@
           # 开发期看 qq-adapter 的连接与收消息细节；上线前调回 1。
           qq-adapter: 3
 
-    # 探针 A：只验证补丁层 → 装配树 → 模块加载 → 激活
-    - id: hello
-      name: './plugins/hello.ts'
 
-    # 探针 B：验证树外 bare import 解析 + inject 激活 + 服务注册
-    - id: probe-tools
-      name: './plugins/probe-tools.ts'
+    # ── QQ 领域 ──────────────────────────────────────────────────────
+    # 目录结构照 DSH 的分法：**分组在「包」级别**（qq/adapter、qq/tools…），
+    # 每个包内部保持扁平 —— DSH 的 packages/<group>/<pkg>/src 也是平的
+    # （查过 5 个包，src 下没有任何子目录）。
+    #
+    # 三层纪律的对应：
+    #   qq/adapter   ① 能力 seam（执行）—— provide('qq')
+    #   qq/tools     ② 工具包装（模型化）
+    #   qq/prompt    ③ 提示词（说明）
+    #   qq/pipeline  消息段 → LLM 文本（库，被 adapter 拥有，**不是插件**）
+    #   qq/protocol  OneBot v11 线上类型（adapter 与 pipeline 共用）
+    #   qq/attention 「注意力」—— 订阅感知条目，决定什么值得打断她
+    #   qq/resident  常驻会话
 
-    # QQ 能力 seam：OneBot v11 WebSocket 客户端，连 SnowLuma 的协议端。
-    # 连不上会按退避重连，不阻塞装配——所以协议端还没起来也能正常启动。
-    # provide('qq')，供 qq-tools 调用。
+    # ① 能力 seam：OneBot v11 WebSocket 客户端，连 SnowLuma 的协议端。
+    # 连不上会按退避重连，不阻塞装配 —— 协议端还没起来也能正常启动。
     #
     # accessToken 从环境变量取，**不落进版本库**：值写在 $DSH_HOME/.env
     # （已被 .gitignore 忽略），DSH 启动时经 loadLayeredEnv 的 user 层注入。
     - id: qq-adapter
-      name: './plugins/qq/adapter.ts'
+      name: './plugins/qq/adapter/index.ts'
       config:
         wsUrl: ws://127.0.0.1:3001
         accessToken: !!js "process.env.QQ_ACCESS_TOKEN ?? ''"
         selfId: ''
 
-    # 开发探针：把 qq/message 渲染成 LLM 文本打日志，用来验证流水线与当调用范例。
-    # 它 inject ['qq']，所以 qq-adapter 激活后才激活。
-    - id: qq-probe
-      name: './plugins/qq/probe.ts'
-
-    # 工具包装：把 ctx.qq 的能力包成模型可调用的工具。
+    # ② 工具包装：把 ctx.qq 的能力包成模型可调用的工具。
     # inject ['tools','qq']，两者都就绪后才激活。
     - id: qq-tools
-      name: './plugins/qq/tools.ts'
+      name: './plugins/qq/tools/index.ts'
 
-    # 工具调用自检：默认关闭，QQ_TOOL_TEST=<工具名> 才真的调用。
-    # 走 ctx.tools.execute 而非直接调服务——只有经过完整工具管道才算验证了工具定义。
-    # 发消息类工具会自动撤回。
-    - id: qq-probe-tools
-      name: './plugins/qq/probe-tools.ts'
+    # ③ 提示词段落：告诉白羽她在 QQ 上。
+    #
+    # TODO（docs/design.md §二）：现在的措辞是"必须调用 qq_send_message"，
+    # 属于"用提示词求模型做事"。设计方向改成用「信息差」驱动 ——
+    # 只告诉她"有人 @ 了你，但我没告诉你说了什么"，让她自己决定去看。
+    - id: qq-prompt
+      name: './plugins/qq/prompt/index.ts'
 
-    # 「推」：把 QQ 消息变成 user 消息推进白羽的上下文并唤醒她（followup）。
-    # 默认 trigger=mention —— 只有 @ 白羽 才推。改成 all 之前想清楚：
-    # 那意味着她在所有群里对每条消息开口（包括那个 332 人的群）。
-    - id: qq-push
-      name: './plugins/qq/push.ts'
+    # 「注意力」：订阅感知条目，决定什么值得打断她，然后唤醒 agent。
+    #
+    # 命名定案（见 docs/decisions.md）：词汇分三层——
+    #   领域【注册信号】（状态信号 / 唤醒信号）→ 感知层采集渲染成【感知条目】
+    #   → 本插件订阅条目并【分配注意力】。所以这里不叫"信号"（那是注册侧的词），
+    #   也不叫"push"（它并不在推）。
+    #
+    # TODO（docs/design.md §四、§七）—— 现在的实现有四个问题，M2 重写：
+    #   1. ctx.on('qq/message') —— 订阅的是【QQ 领域的原始事件】，绕过了感知层，
+    #      所以天生只能服务 QQ，新闻/手表/手机推的全收不到
+    #   2. 领域自己渲染消息正文 —— 该由感知层统一渲染（不含内容）
+    #   3. 正文里硬塞行为指令 —— 违反已定纪律「工具返回永不混指令」
+    #   4. ctx.qq.drain() 是【读即已读】—— 与"点进去才算已读"矛盾，
+    #      会污染读语义，M3 之前必须修
+    - id: qq-attention
+      name: './plugins/qq/attention/index.ts'
       config:
         trigger: mention
         groups: []
 
     # 常驻 agent：进程一起来就建白羽的会话，让 QQ 那边随时有人可推。
-    # headless 启动不创建 agent，没有这一行 qq-push 会一直报"无人可推"。
-    # greeting 从环境变量取（默认空 = 启动时不说话）；想冒烟测试就
-    #   $env:QQ_RESIDENT_GREETING='...'
-    # 这样不用改这个文件，也不必让测试用语进版本库。
+    # headless 启动不创建 agent，没有这一行 qq-attention 会一直报"无人可推"。
+    # greeting 从环境变量取（默认空 = 启动时不说话）。
     - id: qq-resident
-      name: './plugins/qq/resident.ts'
+      name: './plugins/qq/resident/index.ts'
       config:
         sessionId: plos-baiyu
         cwd: ''
         greeting: !!js "process.env.QQ_RESIDENT_GREETING ?? ''"
-
-    # 系统提示词段落（三层里的第③层）：告诉白羽她在 QQ 上、以及不调 qq_send_message
-    # 就没人看得见她。没有这一层，实测她收到推送后只在会话里"回答"，群里毫无动静。
-    - id: qq-prompt
-      name: './plugins/qq/prompt.ts'
-
-    # 模型链路自检：默认关闭（QQ_LLM_PROBE=1 才跑）。绕过整个 agent 直接调
-    # ctx.llm.stream()，用来分离"能力层（provider/凭证/网络）"与"会话层"的故障。
-    - id: qq-probe-llm
-      name: './plugins/qq/probe-llm.ts'
-
-    # 可行性验证：fork 快照 + 三阶段合并。QQ_FORK_PROBE=1 才跑。
-    - id: qq-probe-fork
-      name: './plugins/qq/probe-fork.ts'

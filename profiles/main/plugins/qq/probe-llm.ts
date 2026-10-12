@@ -30,7 +30,7 @@ export const inject = ['llm', 'agentDefaultModel']
  */
 async function run(ctx: Context): Promise<void> {
   const selection = ctx.agentDefaultModel.currentSelection()
-  ctx.logger.info(`[qq-probe-llm] 用 ${selection.provider} / ${selection.model} 直连一次`)
+  console.log(`[qq-probe-llm] 用 ${selection.provider} / ${selection.model} 直连一次`)
 
   const chunks: string[] = []
   try {
@@ -42,11 +42,11 @@ async function run(ctx: Context): Promise<void> {
     for await (const chunk of stream) {
       chunks.push(chunk.type)
       if (chunk.type === 'text-delta') process.stdout.write(chunk.text)
-      if (chunk.type === 'finish') ctx.logger.info(`[qq-probe-llm] finish=${JSON.stringify(chunk)}`)
+      if (chunk.type === 'finish') console.log(`[qq-probe-llm] finish=${JSON.stringify(chunk)}`)
     }
-    ctx.logger.info(`[qq-probe-llm] 成功：收到 ${String(chunks.length)} 个 chunk（${chunks.join(',')}）`)
+    console.log(`[qq-probe-llm] 成功：收到 ${String(chunks.length)} 个 chunk（${chunks.join(',')}）`)
   } catch (error) {
-    ctx.logger.warn(`[qq-probe-llm] 失败：${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`)
+    console.log(`[qq-probe-llm] 失败：${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`)
   }
 }
 
@@ -64,6 +64,6 @@ export function apply(ctx: Context): void {
     await new Promise(resolve => setTimeout(resolve, Number.isFinite(delayMs) ? delayMs : 15000))
     await run(ctx)
   })().catch((error: unknown) => {
-    ctx.logger.warn(`[qq-probe-llm] 未捕获：${error instanceof Error ? error.message : String(error)}`)
+    console.log(`[qq-probe-llm] 未捕获：${error instanceof Error ? error.message : String(error)}`)
   })
 }

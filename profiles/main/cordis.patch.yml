@@ -40,24 +40,39 @@
     provider: deepseek-official
     model: deepseek-flash
 
-# 禁掉 DeepSeek 的请求扩展插件 —— **这是绕过，不是修复**。
+# 请求扩展插件：**仍处于禁用**，但原因已查实（不再是盲目的绕过）。
 #
-# 症状：启用时每一次模型调用都以
-#   finish{reason:{kind:'error',failure:{code:'REQUEST_EXTENSION',
-#          message:'DeepSeek request extension preparation failed'}}}
-# 结束，且 tokenUsage.totals 全为 0。表现是"agent 那一轮正常跑完但什么都没发生"。
+# 真正的元凶是 logger-console 那一行的**裸包名解析失败**：
+# plugin-package-inventory-deepseek 要为每个活跃 Loader 条目找出"所属包"
+# (packages/llm/plugin-package-inventory-deepseek/src/index.ts:112-125)。
+# 裸包名走 packageOf()，解析不到就**直接抛错、不回落**(:124)。
 #
-# 定位过程（每一步都留了工具，不是猜的）：
-#   1. plugins/qq/probe-llm.ts 直连 ctx.llm.stream()，绕开整个 agent
-#   2. 最初拿到 NO_ADAPTER —— 但那是竞态假象：探针在树装配完成前就跑了，
-#      而 provider 是别的插件在它自己的 apply 里注册的。延迟 20s 后错误才现出真身
-#   3. 禁用本插件后立刻成功：finish{kind:'stop'} + 66 个 chunk（含 usage）
+#   @deepseek-ai/cordis-plugin-logger-console  <- 解析不到
+#   （推测：它是 vendored cordis 插件，不在 DSH 安装的 dependencies+peerDependencies
+#     里，所以安装作用域收集不到；dsh-base 那上百个裸包名都在，所以只有它炸）
 #
-# 它做的是"插件贡献的附加请求字段"（plugin-contributed request fields），
-# 会遍历 Loader 里的插件包清单。我们的 profile 插件是**相对路径的 .ts 文件、
-# 不是 npm 包**，很可能就是这里炸的原因 —— 但真正的原因还没查实。
+# 证据（对照实验，唯一变量）：
+#   启用 logger-console + 启用本插件 -> REQUEST_EXTENSION，每次模型调用都失败
+#   禁用 logger-console + 启用本插件 -> finish{kind:'stop'}，48 chunk，含 usage
+# 即：两行都启用时坏的是 logger-console；把本插件禁掉只是掩盖症状。
 #
-# TODO：查明真正原因后恢复本行。届时把这条 disable 删掉即可。
+# 症状回顾（极具迷惑性）：每次模型调用都以
+#   finish{reason:{kind:'error',failure:{code:'REQUEST_EXTENSION', ...}}}
+# 结束，tokenUsage.totals 全为 0。表现是"agent 那一轮正常跑完、零错误、什么都没发生"。
+#
+# 两个观测工具（都不是猜）：
+#   plugins/qq/probe-llm.ts  绕开整个 agent 直连 ctx.llm.stream()，把"能力层
+#     (provider/凭证/网络)"与"会话层"的故障分开。它自己有个坑：必须延迟，
+#     否则拿到的是 NO_ADAPTER 的竞态假象。
+#   投影缓存 storages/session_projcache/sessions/<id>.json 里的 tokenUsage /
+#     turnBoundary —— 就是它让我们看出"跑了但没耗 token"。
+#
+# TODO 真正的修复（择一）：
+#   a) 把 @deepseek-ai/cordis-plugin-logger-console 加进 profile 的 dependencies
+#      并 pnpm install，让它在 profile 作用域里可解析
+#   b) 换一个能解析到的 logger exporter
+#   c) 查清 vendored cordis 插件为何不进安装作用域（根因，最彻底）
+# 修好后删掉下面这条 disable，并恢复 logger-console 那一行。
 - id: deepseek-llm-api-extensions
   disabled: true
 

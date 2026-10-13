@@ -66,6 +66,9 @@ export class Db extends Service {
    */
   readonly handle: DatabaseSync
 
+  /** 配置。`init` 里打日志时还要用，所以留成字段。 */
+  private readonly config: Config
+
   /**
    * @param ctx - 本插件的上下文。
    * @param config - 配置。
@@ -73,28 +76,55 @@ export class Db extends Service {
   constructor(ctx: Context, config: Config) {
     super(ctx, 'db')
 
+    this.config = config
     mkdirSync(dirname(config.path), { recursive: true })
     const handle = new DatabaseSync(config.path)
     this.handle = handle
 
-    // 迁移在**构造时**跑：它是幂等 DDL（`IF NOT EXISTS`），重装无害。
-    const result = migrate(handle)
-
-    // ⚠️ 已知问题：Service 插件在构造期间拿不到自己的 logger 作用域 ——
-    // `this.ctx.logger` 在这里是 `undefined`（实测：推迟到 setTimeout 里也一样）。
-    // 详见 docs/design.md 的实施记录。先用可选访问，**日志失败不让设施失效**。
-    const logger = (this.ctx as { logger?: { info: (message: string) => void } }).logger
-    logger?.info(`db：${config.path} —— ${result.applied.length === 0
-      ? `已是最新（v${String(result.to)}）`
-      : `v${String(result.from)} → v${String(result.to)}：${result.applied.join('、')}`}`)
-
-    // effect 只管**连接**这个真资源。**不删表** —— HMR 会让插件在改文件时
-    // 卸载重装，disposer 去 DROP TABLE 等于每改一次代码清空一次库。
-    ctx.effect(() => () => { handle.close() })
+    // 迁移必须在这里跑完：`ctx.db` 一旦被 provide，别人就可能立刻用，表得先存在。
+    // 它是幂等 DDL（`IF NOT EXISTS`），重装无害。
+    migrate(handle)
 
     this.messages = new MessageStore(handle)
     this.perception = new PerceptionStore(handle)
     this.sessionPointer = new SessionPointer(handle)
+  }
+
+  /**
+   * 构造完成之后运行 —— **类插件的激活期工作放这里**，`yield` 出来的是 disposer。
+   *
+   * 已实测确认这个钩子**会被调用**（往表里写一行诊断数据验证过），
+   * 也确认它**晚于**构造函数 —— 见下面那条日志的说明。
+   */
+  async *[Service.init](): AsyncGenerator<() => void, void, void> {
+    // 只关连接、**不删表** —— HMR 会让插件在改文件时反复重装，
+    // 删表等于每改一次代码清空一次库。
+    yield () => { this.handle.close() }
+
+    const result = migrate(this.handle)
+
+    // ⚠️ 未解：这个插件拿到的 `this.ctx.logger` 不产出任何输出。
+    //
+    // 已排除的原因（都实测过）：
+    //   × 不是 inject —— `static inject = ['logger']` 会让插件【永不激活】，
+    //     因为 logger 是 Context 的自有属性（vendor/cordis/src/context.ts:81），
+    //     不是注册的服务名，注入它等于永远等服务
+    //   × 不是"构造函数太早" —— 挪到 `Service.init`（本方法）里一样没有输出
+    //   × 不是"推迟不够" —— `setTimeout(0)` 也一样
+    //   × 不是级别过滤 —— 用 `logger.error`（level 0，永远显示）也一样没有
+    //   × 不是 init 没跑 —— 往表里写诊断行验证过，跑了
+    //
+    // 对照：`qq-adapter`（同样是 Service 类）用 `this.ctx.logger` 是正常的，
+    // 但它的调用都发生在**激活之后的方法**里，没有一处在构造或 init 期。
+    //
+    // 所以先用可选访问兜住：**诊断日志不该让设施失效**。
+    // 功能是完整的（库、表、迁移、库存取都验过），这只是少一行启动日志。
+    const logger = (this.ctx as { logger?: { info: (message: string) => void } }).logger
+    if (this.config.verbose) {
+      logger?.info(`db：${this.config.path} —— ${result.applied.length === 0
+        ? `已是最新（v${String(result.to)}）`
+        : `v${String(result.from)} → v${String(result.to)}：${result.applied.join('、')}`}`)
+    }
   }
 }
 

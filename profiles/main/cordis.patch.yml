@@ -101,6 +101,17 @@
       config:
         path: !!js "process.env.DSH_HOME + '/data/plos.db'"
         verbose: true
+    # 当前注意力指针（抢占式嵌套的栈）。**领域无关**。
+    #
+    # 放 `data/` 的一个文件而**不进数据库**（用户定案）：数据库存会话记录/图片/
+    # 表情包等大批量内容；指针栈是小的、显式的、排障时要直接看的。
+    # 每次改动即时落盘（临时文件 + 改名）。
+    #
+    # 注意它**不认识 TCB** —— 帧上带 tcb 字段，但不解释它。
+    - id: pointer
+      name: './plugins/pointer/index.ts'
+      config:
+        path: !!js "process.env.DSH_HOME + '/data/pointer-stack.json'"
     # 感知设施：**领域无关**（不认识 QQ），provide('perception')。
     # 领域 register() 一个信号源（pull + templates），感知层按闲时定时器拉、
     # 统一渲染【不含内容】的简报、落库、发 `perception/notice` 事件。

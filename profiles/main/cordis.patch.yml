@@ -134,8 +134,7 @@
     # 三层纪律的对应：
     #   qq/adapter   ① 能力 seam（执行）—— provide('qq')
     #   qq/tools     ② 工具包装（模型化）
-    #   qq/prompt    ③ 提示词（说明）
-    #   qq/pipeline  消息段 → LLM 文本（库，被 adapter 拥有，**不是插件**）
+        #   qq/pipeline  消息段 → LLM 文本（库，被 adapter 拥有，**不是插件**）
     #   qq/protocol  OneBot v11 线上类型（adapter 与 pipeline 共用）
     #   attention    响应侧 —— 订阅感知条目，决定什么值得打断她
     #   qq/resident  常驻会话
@@ -165,13 +164,6 @@
     # 等于"感知层替你点进去了"，M3 改结构后这条路径已不存在。）
     - id: qq-signals
       name: './plugins/qq/signals/index.ts'
-    # ③ 提示词段落：告诉白羽她在 QQ 上。
-    #
-    # TODO（docs/design.md §二）：现在的措辞是"必须调用 qq_send_message"，
-    # 属于"用提示词求模型做事"。设计方向改成用「信息差」驱动 ——
-    # 只告诉她"有人 @ 了你，但我没告诉你说了什么"，让她自己决定去看。
-    - id: qq-prompt
-      name: './plugins/qq/prompt/index.ts'
 
     # 「注意力」：订阅感知条目，决定什么值得打断她，然后唤醒 agent。
     #

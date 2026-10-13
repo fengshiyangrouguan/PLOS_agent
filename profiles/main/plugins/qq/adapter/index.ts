@@ -84,7 +84,13 @@ export interface QqIncoming {
    * 所以这里在解析阶段就落定，渲染阶段才去补昵称。
    */
   readonly atUserIds: string[]
-  /** 群名（若协议端在事件里带了 `peerName`）。 */
+  /**
+   * 群名。
+   *
+   * 优先取 group_name —— 实测 SnowLuma（Lagrange 内核）发的是这个字段。
+   * peerName 留作兼容回落（别的协议端可能有）。都取不到就是 undefined，
+   * 调用方自己回落。
+   */
   readonly groupName: string | undefined
   /** 原始事件，仅供排障。**不要喂给模型**——它可能很大且含冗余字段。 */
   readonly raw: RawEvent
@@ -455,7 +461,9 @@ export class QqAdapter extends Service {
       segments,
       mentionsSelf,
       atUserIds,
-      groupName: typeof event.peerName === 'string' && event.peerName !== '' ? event.peerName : undefined,
+      groupName: typeof event.group_name === 'string' && event.group_name !== ''
+      ? event.group_name
+      : (typeof event.peerName === 'string' && event.peerName !== '' ? event.peerName : undefined),
       raw: event,
     }
     // 入缓冲，再广播。顺序要紧：监听器里读缓冲时必须已经能看到这一条。

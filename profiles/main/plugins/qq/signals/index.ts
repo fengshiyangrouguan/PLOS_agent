@@ -52,7 +52,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { QqIncoming } from '../adapter/index.ts'
-import { parseConversation } from '../adapter/buffer.ts'
+import { conversationOf, parseConversation } from '../adapter/buffer.ts'
 import type { Signal } from '../../perception/types.ts'
 
 /** 插件名。 */
@@ -82,7 +82,7 @@ async function archive(ctx: Context, incoming: QqIncoming): Promise<void> {
   ctx.db.messages.insert({
     platform: 'qq',
     messageId: incoming.messageId,
-    conversationId: conversationIdOf(incoming),
+    conversationId: conversationOf(incoming),
     conversationType: incoming.groupId === undefined ? 'private' : 'group',
     conversationName: incoming.groupName,
     senderId: incoming.userId,
@@ -93,22 +93,19 @@ async function archive(ctx: Context, incoming: QqIncoming): Promise<void> {
   })
 }
 
+
 /**
- * 算出一条消息所属的规范化会话 id。
- * @param incoming - 入站消息。
- * @returns `group:<群号>` 或 `private:<QQ号>`。
+ * 取会话名（群名），取不到时回落 id。
+ *
+ * **占位符必须有值** —— 感知层的 `applyTemplate` 对缺字段是抛错的，
+ * 所以这里不能把 `undefined` 传给模板。
+ *
+ * @param last - 该会话最后一条消息。
+ * @param fallback - 群名缺失时的回落值（用会话 id）。
+ * @returns 会话名。
  */
 function nameOf(last: QqIncoming | undefined, fallback: string): string {
   return last?.groupName ?? fallback
-}
-
-/**
- * 算出一条消息所属的规范化会话 id。
- * @param incoming - 入站消息。
- * @returns `group:<群号>` 或 `private:<QQ号>`。
- */
-function conversationIdOf(incoming: QqIncoming): string {
-  return incoming.groupId === undefined ? `private:${incoming.userId}` : `group:${incoming.groupId}`
 }
 
 /**

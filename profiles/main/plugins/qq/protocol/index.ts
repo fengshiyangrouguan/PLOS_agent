@@ -61,6 +61,7 @@ export interface MessageEvent extends RawEvent {
    * OneBot v11 本身没有群名，标准做法是调 `get_group_info` 查——但那是一次额外往返。
    * 用这个字段，取不到就不取（旧版也是这么做的）。
    */
+  group_name?: string
   peerName?: string
 }
 

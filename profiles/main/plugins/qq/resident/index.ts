@@ -34,7 +34,7 @@ import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 // 副作用式类型导入：把 `agentDefaultModel` 注册到 Context 上。不 import 就没有这个属性
 // （DSH 的声明合并在各自的包里，得有人先把它拉进编译单元）。
 import type {} from '@deepseek-ai/dsh-agent-default-model'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 
 /** 插件名。 */
@@ -50,7 +50,7 @@ export const name = 'qq-resident'
  * 这是实测踩出来的：日志时间线显示 apply 跑在 `hmr watching` 之前。
  * 靠依赖声明约束顺序，比轮询等工厂出现可靠。
  */
-export const inject = ['agents', 'agentLoop', 'agentDefaultModel']
+export const inject = ['agents', 'agentLoop', 'agentDefaultModel', 'tcb']
 
 /** 配置。 */
 export interface Config {
@@ -96,18 +96,36 @@ export function apply(ctx: Context, config: Config): void {
     let disposed = false
 
     const creating = (async (): Promise<void> => {
-      // 模型从 `agent-default-model` 那一行读，不在这里再配一份——单一真相源。
+      // 模型：**优先从 TCB 读**（一个 TCB 一套配置，docs/m5-preemption.md §12.2）。
+      // 没有 TCB 时回落到 `agent-default-model` —— 单一真相源从那一行**转移**到 TCB，
+      // 但没配 TCB 时仍要好用。
+      //
       // 不给 agentOptions 的话这个会话**没有模型**，那一轮根本构造不出请求：
       // 表面看是"收到消息没反应"，实际是压根没发出去过。
+      const tcb = ctx.tcb.get()
       const selection = ctx.agentDefaultModel.currentSelection()
+      if (tcb === undefined) {
+        ctx.logger.warn('qq-resident: 没有可用的 TCB，模型回落到 agent-default-model')
+      }
+      const agentOptions = tcb === undefined
+        ? {
+            provider: selection.provider,
+            model: selection.model,
+            ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
+          }
+        : {
+            provider: tcb.model.provider,
+            model: tcb.model.model,
+            ...tcb.model.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(tcb.model.reasoningEffort) },
+          }
+
       const created = await ctx.agents.create({
         sessionId: SessionId(config.sessionId),
         ...config.cwd === '' ? {} : { meta: { cwd: config.cwd } },
-        agentOptions: {
-          provider: selection.provider,
-          model: selection.model,
-          ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
-        },
+        agentOptions,
+        // 把 TCB 接到**这个 agent 自己的 scope** 上：白名单过滤 + 人设段落。
+        // 在 `setup` 里注册，所以不必解析 scope 反查 TCB —— 作用域本身就是答案。
+        ...tcb === undefined ? {} : { setup: (agentCtx: Context) => { ctx.tcb.apply(agentCtx, tcb) } },
       })
       // 卸载可能发生在创建返回之前：这时不要留下没人管的会话。
       if (disposed) {

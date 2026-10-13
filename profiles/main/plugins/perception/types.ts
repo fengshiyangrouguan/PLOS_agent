@@ -78,10 +78,25 @@ export interface SignalSource {
   readonly pull: () => Promise<readonly Signal[]> | readonly Signal[]
 }
 
+/**
+ * 本轮拉取是谁发起的。
+ *
+ * **这条区分是必要的**，否则 `priority: 0` 的条目无法交付：
+ * 它"永不唤醒"，可它又只在闲时定时拉时出现 —— 如果闲时那次也不唤醒，
+ * 她就永远看不到它。
+ *
+ * 所以 `priority: 0` 的准确含义是「**不因它自己而唤醒**」：
+ * - `idle`：闲时定时器发起 → **要唤醒**（这就是"她定期四处看看"）
+ * - `signal`：领域主动推的唤醒信号 → 只有 `highest > 0` 才唤醒
+ */
+export type NoticeTrigger = 'idle' | 'signal'
+
 /** 渲染好的一条简报，也是 `perception/notice` 事件的载荷。 */
 export interface PerceptionNotice {
   /** 生成时间（毫秒）。 */
   readonly at: number
+  /** 本轮是谁发起的。响应侧靠它决定 `priority: 0` 的条目要不要交付。 */
+  readonly trigger: NoticeTrigger
   /** 渲染好的简报正文（含时间戳与 `【域名】` 分节）。 */
   readonly text: string
   /** 参与本次简报的信号，已按领域分组、组内保持 `pull` 返回的顺序。 */

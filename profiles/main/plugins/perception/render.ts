@@ -32,7 +32,7 @@
 
 import {
   PRIORITY_MAX, PRIORITY_PASSIVE,
-  type PerceptionNotice, type ResolvedSignal, type Signal, type SignalSource,
+  type NoticeTrigger, type PerceptionNotice, type ResolvedSignal, type Signal, type SignalSource,
 } from './types.ts'
 
 /** 一个领域本轮拉到的信号。 */
@@ -101,10 +101,15 @@ export function effectivePriority(signal: Signal, domainPriority?: number | unde
  *
  * @param at - 本轮生成时间（毫秒）。
  * @param groups - 各领域本轮拉到的信号。
+ * @param trigger - 本轮是谁发起的（`idle` = 闲时定时器，`signal` = 领域推的唤醒信号）。
  * @returns 渲染好的感知条目。
  * @throws 当某条信号的 `kind` 在领域模板表里找不到。
  */
-export function renderNotice(at: number, groups: readonly DomainGroup[]): PerceptionNotice {
+export function renderNotice(
+  at: number,
+  groups: readonly DomainGroup[],
+  trigger: NoticeTrigger = 'signal',
+): PerceptionNotice {
   const resolved: ResolvedSignal[] = []
   const sections: string[] = []
 
@@ -142,6 +147,7 @@ export function renderNotice(at: number, groups: readonly DomainGroup[]): Percep
 
   return {
     at,
+    trigger,
     text,
     signals: resolved,
     highest,

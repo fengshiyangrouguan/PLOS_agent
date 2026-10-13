@@ -126,7 +126,7 @@
     #   qq/prompt    ③ 提示词（说明）
     #   qq/pipeline  消息段 → LLM 文本（库，被 adapter 拥有，**不是插件**）
     #   qq/protocol  OneBot v11 线上类型（adapter 与 pipeline 共用）
-    #   qq/attention 「注意力」—— 订阅感知条目，决定什么值得打断她
+    #   attention    响应侧 —— 订阅感知条目，决定什么值得打断她
     #   qq/resident  常驻会话
 
     # ① 能力 seam：OneBot v11 WebSocket 客户端，连 SnowLuma 的协议端。
@@ -168,8 +168,8 @@
     #   3. 正文里硬塞行为指令 —— 违反已定纪律「工具返回永不混指令」
     #   4. ctx.qq.drain() 是【读即已读】—— 与"点进去才算已读"矛盾，
     #      会污染读语义，M3 之前必须修
-    - id: qq-attention
-      name: './plugins/qq/attention/index.ts'
+    - id: attention
+      name: './plugins/attention/index.ts'
       config:
         trigger: mention
         groups: []

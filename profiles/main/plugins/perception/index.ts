@@ -36,7 +36,7 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { Config as ConfigSchema, MAX_IDLE_INTERVAL_MS, MIN_IDLE_INTERVAL_MS, type Config } from './config.ts'
 import { renderNotice, type DomainGroup } from './render.ts'
-import type { PerceptionNotice, SignalSource } from './types.ts'
+import type { NoticeTrigger, PerceptionNotice, SignalSource } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Events {
@@ -131,7 +131,7 @@ export class Perception extends Service {
    * @param at - 本轮时间戳（毫秒）。省略用当前时间。
    * @returns 渲染好的感知条目；没有任何信号时 `text` 为空串。
    */
-  async collect(at: number = Date.now()): Promise<PerceptionNotice> {
+  async collect(at: number = Date.now(), trigger: NoticeTrigger = 'signal'): Promise<PerceptionNotice> {
     const groups = await Promise.all(this.sources.map(async (source): Promise<DomainGroup> => {
       try {
         return { source, signals: await source.pull() }
@@ -144,7 +144,7 @@ export class Perception extends Service {
         return { source, signals: [] }
       }
     }))
-    return renderNotice(at, groups)
+    return renderNotice(at, groups, trigger)
   }
 
   /**
@@ -154,8 +154,8 @@ export class Perception extends Service {
    *
    * @returns 本轮渲染出的条目。
    */
-  async tick(): Promise<PerceptionNotice> {
-    const notice = await this.collect()
+  async tick(trigger: NoticeTrigger = 'idle'): Promise<PerceptionNotice> {
+    const notice = await this.collect(Date.now(), trigger)
     if (notice.signals.length === 0) return notice
 
     if (this.config.persist) {

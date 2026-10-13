@@ -101,6 +101,20 @@
       config:
         path: !!js "process.env.DSH_HOME + '/data/plos.db'"
         verbose: true
+    # 感知设施：**领域无关**（不认识 QQ），provide('perception')。
+    # 领域 register() 一个信号源（pull + templates），感知层按闲时定时器拉、
+    # 统一渲染【不含内容】的简报、落库、发 `perception/notice` 事件。
+    #
+    # 方向：**领域暴露状态，感知层统一渲染**。领域给的是结构化数据 + 模板，
+    # 不是渲染好的文本 —— 这样"不写大量提示词"才成立：简报只说"有人 @ 了你"，
+    # 不说"你该回话"。
+    #
+    # inject ['db']：感知历史要落库。所以 db 必须排在前面。
+    - id: perception
+      name: './plugins/perception/index.ts'
+      config:
+        idleIntervalMs: 1800000
+        persist: true
     # ── QQ 领域 ──────────────────────────────────────────────────────
     # 目录结构照 DSH 的分法：**分组在「包」级别**（qq/adapter、qq/tools…），
     # 每个包内部保持扁平 —— DSH 的 packages/<group>/<pkg>/src 也是平的

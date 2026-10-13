@@ -47,6 +47,13 @@ import { Config as ConfigSchema, type Config } from './config.ts'
 import { migrate } from './schema.ts'
 import { MessageStore, PerceptionStore, SessionPointer } from './stores.ts'
 
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** 持久化设施。领域无关 —— 表结构通用（`platform` 是列不是库）。 */
+    db: Db
+  }
+}
+
 /**
  * SQLite 数据库设施，注册为 `ctx.db`。
  */

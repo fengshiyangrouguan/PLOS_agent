@@ -101,6 +101,17 @@
       config:
         path: !!js "process.env.DSH_HOME + '/data/plos.db'"
         verbose: true
+    # TCB 目录：一个身份 + 一套配置（模型 / 人设 / **系统提示词白名单**）。
+    #
+    # **放 `data/` 而【不进数据库】**（用户定案）：数据库存会话记录/图片/表情包等
+    # 大批量内容；TCB 只是一份配置，显式在外方便改。
+    #
+    # 坏配置**抛错不激活**（Misconfiguration fails loud）—— 名字拼错的 TCB
+    # 不该静默退回默认，那会让人以为"改了配置但没生效"。
+    - id: tcb
+      name: './plugins/tcb/index.ts'
+      config:
+        path: !!js "process.env.DSH_HOME + '/data/tcb.json'"
     # 当前注意力指针（抢占式嵌套的栈）。**领域无关**。
     #
     # 放 `data/` 的一个文件而**不进数据库**（用户定案）：数据库存会话记录/图片/

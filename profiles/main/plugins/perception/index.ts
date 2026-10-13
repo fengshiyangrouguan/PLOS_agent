@@ -34,7 +34,7 @@
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { Config as ConfigSchema, MAX_IDLE_INTERVAL_MS, MIN_IDLE_INTERVAL_MS, type Config } from './config.ts'
+import { Config as ConfigSchema, type Config } from './config.ts'
 import { renderNotice, type DomainGroup } from './render.ts'
 import type { PerceptionNotice, SignalSource } from './types.ts'
 
@@ -82,7 +82,23 @@ export class Perception extends Service {
   constructor(ctx: Context, config: Config) {
     super(ctx, 'perception')
     this.config = config
-    this.currentIntervalMs = config.idleIntervalMs
+    this.currentIntervalMs = this.clampInterval(config.idleIntervalMs)
+  }
+
+  /**
+   * 按配置的 `minIntervalMs`/`maxIntervalMs` 夹取间隔。
+   *
+   * 上下限是**配置项**，所以夹取放在运行时 —— schema 层没法引用别的配置字段
+   * （见 `config.ts` 的说明）。上下限本身也容错：写反了按 min/max 纠正。
+   *
+   * @param ms - 期望的间隔（毫秒）。
+   * @returns 夹取后的间隔。
+   */
+  private clampInterval(ms: number): number {
+    const low = Math.min(this.config.minIntervalMs, this.config.maxIntervalMs)
+    const high = Math.max(this.config.minIntervalMs, this.config.maxIntervalMs)
+    if (!Number.isFinite(ms)) return low
+    return Math.min(high, Math.max(low, Math.trunc(ms)))
   }
 
   /**
@@ -122,8 +138,7 @@ export class Perception extends Service {
    * @returns 实际生效的间隔。
    */
   setIdleIntervalMs(ms: number): number {
-    if (!Number.isFinite(ms)) return this.currentIntervalMs
-    this.currentIntervalMs = Math.min(MAX_IDLE_INTERVAL_MS, Math.max(MIN_IDLE_INTERVAL_MS, Math.trunc(ms)))
+    this.currentIntervalMs = this.clampInterval(ms)
     return this.currentIntervalMs
   }
 

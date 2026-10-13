@@ -27,6 +27,7 @@
  * @module pointer
  */
 
+import { recordStartupLine } from '../_startup-log.ts'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -149,7 +150,7 @@ export class Pointer extends Service {
       return
     }
     this.stack = stack
-    this.ctx.logger.info(
+    recordStartupLine(
       `pointer: 已恢复 ${String(stack.depth)} 层，当前 = ${stack.current?.sessionId ?? '(无)'}`,
     )
   }

@@ -28,6 +28,7 @@
  * @module qq/resident
  */
 
+import { flushStartupLines } from '../../_startup-log.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
@@ -133,6 +134,11 @@ export function apply(ctx: Context, config: Config): void {
         return
       }
       handle = created
+
+      // 补打各设施的启动自述（db / tcb / pointer）。
+      // 它们跑在挂载早期，那一刻还没有终端出口；本行是补丁层的【最后一行】，
+      // 到这里出口才就绪。**换掉最后一行时要跟着改这里。**
+      flushStartupLines(ctx.logger)
       ctx.logger.info(`qq-resident: 常驻会话已就绪，agent=${created.agent.id}`)
 
       if (config.greeting !== '') {

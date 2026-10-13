@@ -4,7 +4,8 @@
  * ## 它是什么 / 不是什么
  *
  * **是**：一个**领域无关**的持久化设施。它 `provide('db')`，对上层暴露 `this.ctx.db`，
- * 提供三样存储：完整消息存档（搜索工具的数据源）、感知历史、当前会话指针。
+ * 提供两样存储：完整消息存档（搜索工具的数据源）、感知历史。
+ * （当前会话指针已迁到 ctx.pointer —— 见 PLOS/docs/m5-preemption.md §6。）
  *
  * **不是**：它**不认识 QQ，也不认识任何领域**。表结构是通用的
  * （`platform` 是列而不是库），谁需要谁调。这是用户明确要求的
@@ -39,6 +40,7 @@
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'
+import { recordStartupLine } from '../_startup-log.ts'
 import z from '@deepseek-ai/schemastery'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
@@ -107,9 +109,8 @@ export class Db extends Service {
 
     const result = migrate(this.handle)
 
-    // 启动自述。
-    //
-    // ⚠️ **这一行在这里打，终端上看不见 —— 但这不是 bug，也不是"logger 取不到"。**
+    // 启动自述。**不在 init 期直接打** —— 那一刻还没有终端出口（见 _startup-log.ts）。
+    // 先登记，由补丁层最后一行补打。
     //
     // 完整因果（已闭合，见 PLOS/docs/logger-issue.md）：
     //
@@ -134,7 +135,7 @@ export class Db extends Service {
     // 正确的修法在 logbook 侧（让 stderr exporter 不依赖 commands），
     // 不该让每个业务设施自己加 `console.log` 绕。
     if (this.config.verbose) {
-      this.ctx.logger.info(`db：${this.config.path} —— ${result.applied.length === 0
+      recordStartupLine(`db：${this.config.path} —— ${result.applied.length === 0
         ? `已是最新（v${String(result.to)}）`
         : `v${String(result.from)} → v${String(result.to)}：${result.applied.join('、')}`}`)
     }

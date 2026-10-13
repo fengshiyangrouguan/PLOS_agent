@@ -33,6 +33,7 @@
  * @module tcb
  */
 
+import { recordStartupLine } from '../_startup-log.ts'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { readFileSync } from 'node:fs'
@@ -95,7 +96,7 @@ export class TcbRegistry extends Service {
     if (!parsed.ok) throw new Error(`tcb: 目录不合法（${this.config.path}）：${parsed.error}`)
 
     this.catalog = parsed.catalog
-    this.ctx.logger.info(
+    recordStartupLine(
       `tcb: 已载入 ${String(this.catalog.tcbs.size)} 个（默认 ${this.catalog.defaultId}）：`
       + [...this.catalog.tcbs.keys()].join(', '),
     )

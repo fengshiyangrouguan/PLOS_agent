@@ -34,7 +34,7 @@ import { QqActionError, type QqTarget } from '../adapter/index.ts'
 export const name = 'qq-tools'
 
 /** 依赖工具注册表与 `qq` 服务。 */
-export const inject = ['tools', 'qq']
+export const inject = ['tools', 'qq', 'db']
 
 /**
  * 解析 `target` 参数。
@@ -80,7 +80,9 @@ const REGISTERED_TOOLS = [
   'qq_read_message',
   'qq_list_group_members',
   'qq_recall_message',
-  'qq_check_messages',
+  'qq_chats',
+  'qq_read',
+  'qq_search',
 ] as const
 
 /**
@@ -347,38 +349,34 @@ export function apply(ctx: Context): void {
     },
   }))
 
-  // ── 主动查看消息（"拉"）─────────────────────────────────────────────
+  // ── 手机模型：「打开手机看消息」的三个动作 ─────────────────────────
+  //
+  // 旧版是一个 qq_check_messages 两模式（不传参看概览、传参读正文）。
+  // 按 docs/design.md §7.1 拆成三步 —— **因为"看列表"和"点进去看"是两件事**，
+  // 而它们的差别正是已读语义（§4.7）：
+  //
+  //   qq_chats    打开 QQ 看会话列表 + 红点   →  **不推进游标**
+  //   qq_read     点进某个会话看消息          →  **推进游标**
+  //   qq_search   想不起来聊过什么就去搜      →  不涉及游标
+  //
+  // 这条区分的下层支撑在 adapter：`peek`/`unread` 不推进，只有 `drain` 推进。
+
   ctx.tools.register(defineTool({
-    name: 'qq_check_messages',
+    name: 'qq_chats',
     description: [
-      'Look at QQ messages that arrived and have not been seen yet.',
-      'Call it with no arguments to see which conversations have unread messages and how many.',
-      'Call it with a "conversation" to read that conversation\'s unread messages and mark them read.',
-      'Reading marks messages as seen unless mark_read is false, so the next call returns only what is new.',
+      'Open QQ and look at the chat list: which conversations have something new, and how many.',
+      'This is opening the app and glancing at it — no message text, and nothing becomes read.',
+      'Use qq_read to open one and actually read it.',
     ].join(' '),
-    parameters: {
-      conversation: {
-        type: 'string',
-        description: 'Conversation to read, as "group:<group id>" or "private:<user id>". Omit to list unread counts instead.',
-      },
-      limit: {
-        type: 'integer',
-        description: 'Maximum messages to return per conversation. Defaults to 20. Rendering images and forwards costs work, so raise it deliberately.',
-      },
-      mark_read: {
-        type: 'boolean',
-        description: 'Whether reading advances the seen cursor. Defaults to true. Set false to look without marking as read.',
-      },
-    },
+    parameters: {},
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           ok: { type: 'boolean', required: true },
-          conversations: {
+          chats: {
             type: 'array',
-            description: 'Unread overview, present when no conversation was named.',
             items: {
               type: 'object',
               additionalProperties: false,
@@ -388,14 +386,58 @@ export function apply(ctx: Context): void {
               },
             },
           },
+          reason: { type: 'string' },
+        },
+      },
+      render: (_args, value) => {
+        if (!value.ok) return [{ type: 'text', text: `Could not open the chat list: ${value.reason ?? 'unknown reason'}` }]
+        const chats = value.chats ?? []
+        if (chats.length === 0) return [{ type: 'text', text: 'No unread conversations.' }]
+        return [{
+          type: 'text',
+          text: chats.map(item => `${item.conversation}: ${String(item.unread)} new`).join('\n'),
+        }]
+      },
+    },
+    async execute() {
+      // `unread()` 不推进游标 —— 看列表不等于读过。
+      const chats = ctx.qq.conversations()
+        .map(conversation => ({ conversation, unread: ctx.qq.unread(conversation) }))
+        .filter(item => item.unread > 0)
+      return { ok: true, chats }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_read',
+    description: [
+      'Open one QQ conversation and read its messages.',
+      'This is the step that marks it as read; the chat list does not.',
+      'Rendering images and forwards costs work, so raise limit deliberately.',
+    ].join(' '),
+    parameters: {
+      conversation: {
+        type: 'string',
+        description: 'Conversation to open, as "group:<group id>" or "private:<user id>".',
+        required: true,
+      },
+      limit: {
+        type: 'integer',
+        description: 'Maximum messages to return. Defaults to 20.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
           messages: {
             type: 'array',
-            description: 'Read messages, present when a conversation was named.',
             items: {
               type: 'object',
               additionalProperties: false,
               properties: {
-                conversation: { type: 'string', required: true },
                 messageId: { type: 'string', required: true },
                 senderName: { type: 'string', required: true },
                 text: { type: 'string', required: true },
@@ -407,45 +449,25 @@ export function apply(ctx: Context): void {
         },
       },
       render: (_args, value) => {
-        if (!value.ok) return [{ type: 'text', text: `Check failed: ${value.reason ?? 'unknown reason'}` }]
-        const conversations = value.conversations ?? []
-        if (conversations.length > 0) {
-          return [{
-            type: 'text',
-            text: conversations.map(item => `${item.conversation}: ${String(item.unread)} unread`).join('\n'),
-          }]
-        }
+        if (!value.ok) return [{ type: 'text', text: `Could not read it: ${value.reason ?? 'unknown reason'}` }]
         const messages = value.messages ?? []
-        if (messages.length === 0) return [{ type: 'text', text: 'No unseen messages.' }]
+        if (messages.length === 0) return [{ type: 'text', text: 'Nothing new there.' }]
         return [{
           type: 'text',
           text: messages
-            .map(item => `[${item.conversation}] ${item.senderName}${item.mentionsSelf ? ' (mentioned you)' : ''}: ${item.text}`)
+            .map(item => `${item.senderName}${item.mentionsSelf ? ' (mentioned you)' : ''}: ${item.text}`)
             .join('\n'),
         }]
       },
     },
     async execute(args) {
-      const limit = args.limit ?? 20
-
-      // 概览模式：没给会话就只报未读数，不拉正文——那才是"打开手机看一眼"。
-      if (args.conversation === undefined || args.conversation === '') {
-        const conversations = ctx.qq.conversations()
-          .map(conversation => ({ conversation, unread: ctx.qq.unread(conversation) }))
-          .filter(item => item.unread > 0)
-        return { ok: true, conversations }
-      }
-
       try {
-        // `peek` 不推进游标，`drain` 推进——这就是"看"与"读过"的区别。
-        const unseen = args.mark_read === false
-          ? ctx.qq.peek(args.conversation, limit)
-          : ctx.qq.drain(args.conversation).slice(-limit)
+        // `drain` —— **这一步才推进游标**。
+        const unseen = ctx.qq.drain(args.conversation).slice(-(args.limit ?? 20))
         // 顺序渲染而不是并行：一条消息可能触发图片下载，并发起来会把协议端和网络一起打满。
         const messages = []
         for (const incoming of unseen) {
           messages.push({
-            conversation: args.conversation,
             messageId: incoming.messageId,
             senderName: incoming.senderName,
             text: await ctx.qq.render(incoming),
@@ -453,6 +475,102 @@ export function apply(ctx: Context): void {
           })
         }
         return { ok: true, messages }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_search',
+    description: [
+      'Search the full QQ message archive by text.',
+      'Use it when you do not know what a conversation is about: everything ever received is archived,',
+      'while what you were shown only covered the recent messages.',
+      'Each hit comes back with the messages around it, so you see it in context rather than alone.',
+    ].join(' '),
+    parameters: {
+      query: {
+        type: 'string',
+        description: 'Text to look for.',
+        required: true,
+      },
+      conversation: {
+        type: 'string',
+        description: 'Limit the search to one conversation, as "group:<group id>" or "private:<user id>".',
+      },
+      since_hours: {
+        type: 'integer',
+        description: 'Only look back this many hours. Omit to search the whole archive.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          ranges: {
+            type: 'array',
+            description: 'Each element is one continuous stretch of a conversation containing at least one hit.',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                conversation: { type: 'string', required: true },
+                messages: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      senderName: { type: 'string', required: true },
+                      text: { type: 'string', required: true },
+                      hit: { type: 'boolean', required: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          truncated: { type: 'boolean' },
+          reason: { type: 'string' },
+        },
+      },
+      render: (_args, value) => {
+        if (!value.ok) return [{ type: 'text', text: `Search failed: ${value.reason ?? 'unknown reason'}` }]
+        const ranges = value.ranges ?? []
+        if (ranges.length === 0) return [{ type: 'text', text: 'Nothing matched.' }]
+        const blocks = ranges.map(range => [
+          `[${range.conversation}]`,
+          ...(range.messages ?? []).map(item => `${item.hit ? '>> ' : '   '}${item.senderName}: ${item.text}`),
+        ].join('\n'))
+        if (value.truncated === true) blocks.push('(more matches than fit — narrow the search)')
+        return [{ type: 'text', text: blocks.join('\n\n') }]
+      },
+    },
+    async execute(args) {
+      try {
+        const since = args.since_hours === undefined
+          ? undefined
+          : Date.now() - args.since_hours * 60 * 60 * 1000
+        const result = ctx.db.messages.search({
+          query: args.query,
+          conversationId: args.conversation,
+          since,
+        })
+        return {
+          ok: true,
+          truncated: result.truncated,
+          ranges: result.ranges.map(range => ({
+            conversation: range.conversationId,
+            messages: range.messages.map(row => ({
+              senderName: row.senderName ?? row.senderId ?? 'unknown',
+              text: row.content,
+              hit: range.hitIds.includes(row.messageId),
+            })),
+          })),
+        }
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }
       }

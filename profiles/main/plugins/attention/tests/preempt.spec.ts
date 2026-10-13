@@ -143,7 +143,14 @@ function checkTrue(label: string, actual: boolean): void {
 // ── ★ 防回归：提示里不许再有 fork 模型的残留 ────────────────────────
 {
   checkTrue('★ WRAPUP_HINT 不再要求她"结束该 turn"', !WRAPUP_HINT.includes('结束该 turn'))
-  checkTrue('★ WRAPUP_HINT 要求她处理完接着做原来的事', WRAPUP_HINT.includes('接着做原来的事'))
+  checkTrue(
+    '★ WRAPUP_HINT 明说"可以不管他"（steer 是软的，她本来就有这个权利）',
+    WRAPUP_HINT.includes('你可以选择不管他'),
+  )
+  checkTrue(
+    '★ WRAPUP_HINT 是许可式地说"可以接着做原来的事"，不是命令式',
+    WRAPUP_HINT.includes('可以接着做原来的事'),
+  )
   checkTrue('WRAPUP_HINT 保留"判断是否有必要打断你"', WRAPUP_HINT.includes('打断你'))
 }
 

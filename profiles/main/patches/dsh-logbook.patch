@@ -1,0 +1,73 @@
+diff --git a/src/index.js b/src/index.js
+index fface9eaf7f781aed084043afd8f9be40d1d25e8..f7fe0d570ecfb956eb2bbe15484e8f33a1b9c702 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -2,7 +2,17 @@ import z from '@deepseek-ai/schemastery'
+ import { format as utilFormat } from 'node:util'
+ 
+ export const name = 'logs'
+-export const inject = ['commands']
++/* PLOS patch: was `export const inject = ['commands']`.
++ *
++ * That gated the WHOLE plugin on the `commands` service — including the stderr
++ * exporter below. Anything logged before `commands` became available (notably
++ * `Service.init` of db / tcb / pointer, which log their startup summary) therefore
++ * had no terminal sink at all: the record reached cordis's built-in buffer, and the
++ * buffer is never replayed to stderr.
++ *
++ * The two responsibilities have different dependencies, so only the one that needs
++ * `commands` waits for it now (see the end of this file).
++ */
+ 
+ export const Config = z.object({
+   ring: z.number().step(1).min(100).max(20000).default(2000),
+@@ -116,24 +126,29 @@ export function apply(ctx, config = {}, internals = {}) {
+     },
+   })
+ 
+-  ctx.effect(() => ctx.commands.register({
+-    name: 'logs',
+-    description: 'Show recent plugin log lines',
+-    input: { hint: '[--level warn] [--name x] [--grep text] [--since 5m] [--limit 50]' },
+-    handler: (invocation) => {
+-      const q = parseArgs(invocation.rawInput)
+-      if (q.error) return { kind: 'error', text: q.error }
+-      const cutoff = q.sinceMs === undefined ? undefined : now() - q.sinceMs
+-      const level = { default: q.level ?? 'debug' }
+-      const matches = ring.filter((m) =>
+-        allowed(level, m.name, m.type)
+-        && (q.name === undefined || m.name === q.name)
+-        && (cutoff === undefined || m.ts >= cutoff)
+-        && (q.grep === undefined || formatLine(m).toLowerCase().includes(q.grep)))
+-      const shown = matches.slice(-q.limit)
+-      if (shown.length === 0) return { kind: 'success', text: 'logs: no matching records' }
+-      const header = `logs: ${shown.length} of ${matches.length} records shown (ring ${cfg.ring}, buffer seeded ${seeded})`
+-      return { kind: 'success', text: [header, ...shown.map(formatLine)].join('\n') }
+-    },
+-  }), 'logs: /logs command')
++  // PLOS patch: only the /logs command needs `commands`, so only it waits.
++  // `ctx.inject(deps, cb)` is cordis's own "run this once these services exist"
++  // mechanism (vendor/cordis/src/registry.ts:51).
++  ctx.inject(['commands'], (ctx) => {
++    ctx.effect(() => ctx.commands.register({
++      name: 'logs',
++      description: 'Show recent plugin log lines',
++      input: { hint: '[--level warn] [--name x] [--grep text] [--since 5m] [--limit 50]' },
++      handler: (invocation) => {
++        const q = parseArgs(invocation.rawInput)
++        if (q.error) return { kind: 'error', text: q.error }
++        const cutoff = q.sinceMs === undefined ? undefined : now() - q.sinceMs
++        const level = { default: q.level ?? 'debug' }
++        const matches = ring.filter((m) =>
++          allowed(level, m.name, m.type)
++          && (q.name === undefined || m.name === q.name)
++          && (cutoff === undefined || m.ts >= cutoff)
++          && (q.grep === undefined || formatLine(m).toLowerCase().includes(q.grep)))
++        const shown = matches.slice(-q.limit)
++        if (shown.length === 0) return { kind: 'success', text: 'logs: no matching records' }
++        const header = `logs: ${shown.length} of ${matches.length} records shown (ring ${cfg.ring}, buffer seeded ${seeded})`
++        return { kind: 'success', text: [header, ...shown.map(formatLine)].join('\n') }
++      },
++    }), 'logs: /logs command')
++  })
+ }

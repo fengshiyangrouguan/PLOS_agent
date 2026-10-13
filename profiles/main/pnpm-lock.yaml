@@ -4,13 +4,18 @@ settings:
   autoInstallPeers: false
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  dsh-logbook:
+    hash: febf1be73e955344f52ddde1c62432137dcbfce01d9dd66cf9a3788ad0f7741a
+    path: patches/dsh-logbook.patch
+
 importers:
 
   .:
     dependencies:
       dsh-logbook:
         specifier: ^0.1.0
-        version: 0.1.0
+        version: 0.1.0(patch_hash=febf1be73e955344f52ddde1c62432137dcbfce01d9dd66cf9a3788ad0f7741a)
 
 packages:
 
@@ -38,6 +43,6 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  dsh-logbook@0.1.0:
+  dsh-logbook@0.1.0(patch_hash=febf1be73e955344f52ddde1c62432137dcbfce01d9dd66cf9a3788ad0f7741a):
     dependencies:
       '@deepseek-ai/schemastery': 3.18.4

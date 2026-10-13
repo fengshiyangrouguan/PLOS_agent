@@ -10,6 +10,8 @@
 #   关掉它，缺失的 peer 才会「漏」到安装的 DSH 上，全树共享同一个运行时。
 packages:
   - .
+autoInstallPeers: false
 
 nodeLinker: hoisted
-autoInstallPeers: false
+patchedDependencies:
+  dsh-logbook: patches/dsh-logbook.patch

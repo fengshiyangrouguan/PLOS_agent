@@ -51,7 +51,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { PendingQueue, type PendingItem } from './queue.ts'
-import { planPreemption, withWrapupHint } from './preempt.ts'
+import { planPreemption, withWrapupHint, type PreemptPlan } from './preempt.ts'
 import type { PerceptionNotice } from '../perception/types.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -130,21 +130,54 @@ export class Attention extends Service {
   }
 
   /**
-   * 交付一条：按抢占计划决定要不要带收尾提示。
+   * 交付一条。
+   *
+   * ## ★ 为什么两档走不同方法 —— 这是"抢占"真正成立的地方
+   *
+   * DSH 的原文：
+   *
+   * - `followup(m)` —— *Queue an ordinary follow-up turn and wake the driver.
+   *   The item becomes the **sole ordinary message of its own turn**.*
+   *   ⇒ **排队**：当前 turn 跑完才轮到它。
+   * - `steer(m)` —— *Submit steering for the **nearest step**. An idle driver starts a
+   *   turn; **a running driver consumes it at its next step boundary**.*
+   *   ⇒ **插进当前 turn 的下一个 step**。
+   *
+   * 所以：
+   *
+   * | 情形 | 用什么 | 效果 |
+   * |:--|:--|:--|
+   * | 她闲着（`deliver`） | `followup` | 开一个新 turn |
+   * | 她忙着（两个 preempt 档） | **`steer`** | **在下一个 step 边界插进去** —— 这才是抢占 |
+   *
+   * **用 `followup` 做抢占是假的** —— 它只是排个队，她会把手上的事做完。
+   *
+   * 这也顺带解释了**收尾提示为什么"插在中断里"**：它是**在当前 turn 里**被看到的，
+   * 所以她才有可能在**这一轮结束前**去做点收尾。
    *
    * @param item - 队首待交付项。
-   * @param withHint - 是否在正文末尾拼上收尾提示。
+   * @param planKind - `planPreemption` 的结果。
    * @returns 真的交付了返回 `true`。
    */
-  private deliver(item: PendingItem, withHint: boolean): boolean {
+  private deliver(item: PendingItem, planKind: PreemptPlan['kind']): boolean {
     const agent = this.targetAgent()
     if (agent === undefined) return false
 
-    const text = withHint ? withWrapupHint(item.notice.text) : item.notice.text
-    agent.followup(createUserMessage({
+    // 只有 `<80` 那一档带收尾提示（用户定案：`≥80` 不给收尾机会）。
+    const text = planKind === 'wrapup-then-preempt'
+      ? withWrapupHint(item.notice.text)
+      : item.notice.text
+    const message = createUserMessage({
       content: [{ type: 'text', text }],
       source: { kind: 'perception', domain: item.notice.signals[0]?.domain ?? 'perception' },
-    }))
+    })
+
+    if (planKind === 'deliver') {
+      agent.followup(message)
+    } else {
+      // 两个 preempt 档都走 steer —— 差别只在上面那行提示。
+      agent.steer(message)
+    }
     return true
   }
 
@@ -174,11 +207,10 @@ export class Attention extends Service {
     const item = this.queue.drain()
     if (item === undefined) return
 
-    const withHint = plan.kind === 'wrapup-then-preempt'
-    if (this.deliver(item, withHint)) {
+    if (this.deliver(item, plan.kind)) {
       this.ctx.logger.info(
         `attention: 已交付（${plan.kind}，highest=${String(item.notice.highest)}，`
-        + `收尾提示=${withHint ? '有' : '无'}，剩 ${String(this.queue.size)} 条待交付）`,
+        + `剩 ${String(this.queue.size)} 条待交付）`,
       )
     } else {
       // 目标中途消失 —— 把条目放回去，别丢。

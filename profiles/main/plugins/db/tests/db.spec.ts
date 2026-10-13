@@ -25,7 +25,7 @@
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { LATEST_VERSION, currentVersion, migrate } from '../schema.ts'
-import { DEFAULT_CONTEXT, MessageStore, PerceptionStore, PlanStore } from '../stores.ts'
+import { DEFAULT_CONTEXT, InterruptPlanStore, MessageStore, PerceptionStore } from '../stores.ts'
 
 let passed = 0
 let failed = 0
@@ -127,7 +127,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   const names = (db.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
   ).all() as { name: string }[]).map(row => row.name)
-  check('四张表都在', names, ['events', 'messages', 'perception_history', 'plan'])
+  check('四张表都在', names, ['events', 'interrupt_plan', 'messages', 'perception_history'])
 
   // events 照搬 Shiraha：两条外键降级为普通列（不能有 FOREIGN KEY 约束）。
   const ddl = (db.prepare(
@@ -231,7 +231,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
 // ── 待办（注意力转移模型的恢复路径） ────────────────────────────────
 {
   const db = freshDb()
-  const store = new PlanStore(db)
+  const store = new InterruptPlanStore(db)
   const ttl = 24 * 60 * 60 * 1000
 
   const id = store.insert({

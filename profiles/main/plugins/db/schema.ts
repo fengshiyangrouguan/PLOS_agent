@@ -134,7 +134,7 @@ export const MIGRATIONS: readonly Migration[] = [
       // "写待办"的命令）。所以那段窗口里**没有任何持久化状态需要存活** ——
       // 崩了就崩了，而她的会话本来就还留着那件被打断的事。
       db.exec(`
-        CREATE TABLE IF NOT EXISTS plan (
+        CREATE TABLE IF NOT EXISTS interrupt_plan (
           id         INTEGER PRIMARY KEY AUTOINCREMENT,
           created_at INTEGER NOT NULL,
           session_id TEXT    NOT NULL,
@@ -148,7 +148,7 @@ export const MIGRATIONS: readonly Migration[] = [
           settled_at INTEGER
         )
       `)
-      db.exec('CREATE INDEX IF NOT EXISTS idx_plan_state ON plan (state, expires_at)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_interrupt_plan_state ON interrupt_plan (state, expires_at)')
     },
   },
 ]

@@ -47,7 +47,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { migrate } from './schema.ts'
-import { MessageStore, PerceptionStore, PlanStore } from './stores.ts'
+import { InterruptPlanStore, MessageStore, PerceptionStore } from './stores.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -66,8 +66,13 @@ export class Db extends Service {
   readonly messages: MessageStore
   /** 感知历史。 */
   readonly perception: PerceptionStore
-  /** 待办 —— 注意力转移模型的**恢复路径**（docs/m5-preemption.md §20.7）。 */
-  readonly plan: PlanStore
+  /**
+   * 中断待办 —— 注意力转移模型的**恢复路径**（docs/m5-preemption.md §20.7）。
+   *
+   * 名字里带 `Interrupt` 是**刻意**的：DSH 原生的 `plan` 是另一个东西
+   * （`plan:policy`，logged planning），撞名会让人以为两者有关系。
+   */
+  readonly interruptPlans: InterruptPlanStore
 
   /**
    * 原始句柄。给需要写自定义查询的领域用（比如将来的记忆 / 媒体表）。
@@ -96,7 +101,7 @@ export class Db extends Service {
 
     this.messages = new MessageStore(handle)
     this.perception = new PerceptionStore(handle)
-    this.plan = new PlanStore(handle)
+    this.interruptPlans = new InterruptPlanStore(handle)
   }
 
   /**

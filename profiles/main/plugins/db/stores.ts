@@ -324,7 +324,7 @@ export class PerceptionStore {
 }
 
 /** 待办的状态。 */
-export type PlanState =
+export type InterruptPlanState =
   /** 已写出来、也浮进了上下文，等她处理。 */
   | 'surfaced'
   /** 她处理掉了。 */
@@ -333,7 +333,7 @@ export type PlanState =
   | 'dropped'
 
 /** 一条待办。 */
-export interface PlanRow {
+export interface InterruptPlanRow {
   /** 主键。 */
   readonly id: number
   /** 中断发生时刻（毫秒）。 */
@@ -351,7 +351,7 @@ export interface PlanRow {
   /** 因为什么中断了。 */
   readonly why: string
   /** 状态。 */
-  readonly state: PlanState
+  readonly state: InterruptPlanState
   /** 生命周期到期时刻（毫秒）。 */
   readonly expiresAt: number
   /** 落定时刻（`done` / `dropped` 才有）。 */
@@ -359,7 +359,7 @@ export interface PlanRow {
 }
 
 /** 新建待办时要给的字段。`id` / `state` / `expiresAt` 由 store 生成。 */
-export interface PlanDraft {
+export interface InterruptPlanDraft {
   readonly sessionId: string
   readonly turn: number
   /** 给工具的坐标（`session_event_read(seq=…)`）。 */
@@ -372,7 +372,7 @@ export interface PlanDraft {
 }
 
 /** 数据库里的行形状（snake_case）。 */
-interface PlanDbRow {
+interface InterruptPlanDbRow {
   id: number
   created_at: number
   session_id: string
@@ -387,7 +387,7 @@ interface PlanDbRow {
 }
 
 /** 把数据库行转成领域形状。 */
-function toPlan(row: PlanDbRow): PlanRow {
+function toInterruptPlan(row: InterruptPlanDbRow): InterruptPlanRow {
   return {
     id: row.id,
     createdAt: row.created_at,
@@ -397,7 +397,7 @@ function toPlan(row: PlanDbRow): PlanRow {
     priority: row.priority,
     what: row.what,
     why: row.why,
-    state: row.state as PlanState,
+    state: row.state as InterruptPlanState,
     expiresAt: row.expires_at,
     settledAt: row.settled_at ?? undefined,
   }
@@ -416,7 +416,7 @@ function toPlan(row: PlanDbRow): PlanRow {
  * ⚠️ **中断那一刻不写这张表**：正文要等 `T` 才知道（写待办的快照 subagent
  * 到那时才收到命令）。所以那段窗口里**没有任何持久化状态需要存活**。
  */
-export class PlanStore {
+export class InterruptPlanStore {
   readonly #db: DatabaseSync
 
   /** @param db - 已迁移到最新版的数据库句柄。 */
@@ -431,9 +431,9 @@ export class PlanStore {
    * @param now - 现在（毫秒）。注入以便自检。
    * @returns 新行的 id。
    */
-  insert(draft: PlanDraft, now: number): number {
+  insert(draft: InterruptPlanDraft, now: number): number {
     const result = this.#db.prepare(`
-      INSERT INTO plan (created_at, session_id, turn, seq, priority, what, why, state, expires_at)
+      INSERT INTO interrupt_plan (created_at, session_id, turn, seq, priority, what, why, state, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'surfaced', ?)
     `).run(
       now, draft.sessionId, draft.turn, draft.seq, draft.priority,
@@ -448,11 +448,11 @@ export class PlanStore {
    * @param state - 指定状态；省略时只列**还没落定**的（那才是"待办"）。
    * @returns 待办列表。
    */
-  list(state?: PlanState): PlanRow[] {
+  list(state?: InterruptPlanState): InterruptPlanRow[] {
     const rows = state === undefined
-      ? this.#db.prepare('SELECT * FROM plan WHERE settled_at IS NULL ORDER BY created_at DESC').all()
-      : this.#db.prepare('SELECT * FROM plan WHERE state = ? ORDER BY created_at DESC').all(state)
-    return (rows as unknown as PlanDbRow[]).map(toPlan)
+      ? this.#db.prepare('SELECT * FROM interrupt_plan WHERE settled_at IS NULL ORDER BY created_at DESC').all()
+      : this.#db.prepare('SELECT * FROM interrupt_plan WHERE state = ? ORDER BY created_at DESC').all(state)
+    return (rows as unknown as InterruptPlanDbRow[]).map(toInterruptPlan)
   }
 
   /**
@@ -465,7 +465,7 @@ export class PlanStore {
    */
   settle(id: number, state: 'done' | 'dropped', now: number): boolean {
     const result = this.#db.prepare(
-      'UPDATE plan SET state = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL',
+      'UPDATE interrupt_plan SET state = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL',
     ).run(state, now, id)
     return Number(result.changes) > 0
   }
@@ -479,7 +479,7 @@ export class PlanStore {
    */
   expire(now: number): number {
     const result = this.#db.prepare(
-      "UPDATE plan SET state = 'dropped', settled_at = ? WHERE settled_at IS NULL AND expires_at <= ?",
+      "UPDATE interrupt_plan SET state = 'dropped', settled_at = ? WHERE settled_at IS NULL AND expires_at <= ?",
     ).run(now, now)
     return Number(result.changes)
   }
@@ -487,7 +487,7 @@ export class PlanStore {
   /** 还没落定的有几条（诊断用）。 */
   openCount(): number {
     const row = this.#db.prepare(
-      'SELECT COUNT(*) AS n FROM plan WHERE settled_at IS NULL',
+      'SELECT COUNT(*) AS n FROM interrupt_plan WHERE settled_at IS NULL',
     ).get() as { n: number }
     return row.n
   }

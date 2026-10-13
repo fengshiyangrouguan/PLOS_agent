@@ -16,7 +16,8 @@
  *    （Shiraha_OS 的教训：没有迁移，字段演进静默丢数据）
  * 2. **搜索的区间合并**：这是设计 §7.3 最细的一条 ——
  *    命中靠得近时区间重合，**必须合并**，否则同一段消息返回两遍
- * 3. **单行约束**：会话指针表出现两行就是 bug，`CHECK (id = 1)` 要挡住
+ * 3. **待办的生命周期**：`list()` 默认只列**还没落定**的；已落定的**不会被
+ *    `settle` 改第二次**；`expire` 只丢过期的
  *
  * @module db/spec
  */
@@ -24,7 +25,7 @@
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { LATEST_VERSION, currentVersion, migrate } from '../schema.ts'
-import { DEFAULT_CONTEXT, MessageStore, PerceptionStore } from '../stores.ts'
+import { DEFAULT_CONTEXT, MessageStore, PerceptionStore, PlanStore } from '../stores.ts'
 
 let passed = 0
 let failed = 0
@@ -126,7 +127,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   const names = (db.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
   ).all() as { name: string }[]).map(row => row.name)
-  check('三张表都在', names, ['events', 'messages', 'perception_history'])
+  check('四张表都在', names, ['events', 'messages', 'perception_history', 'plan'])
 
   // events 照搬 Shiraha：两条外键降级为普通列（不能有 FOREIGN KEY 约束）。
   const ddl = (db.prepare(
@@ -224,6 +225,44 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   store.markPulled([recent[0]!.id])
   check('标记后已拉取', store.recent()[0]?.pulled, true)
   check('未标记的仍是未拉取', store.recent()[1]?.pulled, false)
+  db.close()
+}
+
+// ── 待办（注意力转移模型的恢复路径） ────────────────────────────────
+{
+  const db = freshDb()
+  const store = new PlanStore(db)
+  const ttl = 24 * 60 * 60 * 1000
+
+  const id = store.insert({
+    sessionId: 'plos-baiyu', turn: 7, priority: 20,
+    what: '正在写 M5 的接线', why: '群里有人 @ 我', ttlMs: ttl,
+  }, 1000)
+  check('插入返回 id', id, 1)
+  check(
+    '★ 一写出来就是 surfaced —— 没有 pending 中间态（写它和浮进上下文是同一刻）',
+    store.list()[0]?.state,
+    'surfaced',
+  )
+  check('生命周期 = now + ttl', store.list()[0]?.expiresAt, 1000 + ttl)
+  check('★ 回看坐标记的是 turn，不是 seq', store.list()[0]?.turn, 7)
+  check('未落定计数', store.openCount(), 1)
+
+  const second = store.insert({
+    sessionId: 'plos-baiyu', turn: 9, priority: 80,
+    what: '在回私聊', why: '终端要修 bug', ttlMs: ttl,
+  }, 2000)
+  check('时间降序', store.list().map(r => r.turn), [9, 7])
+
+  check('settle(done) 改到了行', store.settle(id, 'done', 3000), true)
+  check('★ 已落定的不会被改第二次', store.settle(id, 'dropped', 4000), false)
+  check('落定时刻写进去了', store.list('done')[0]?.settledAt, 3000)
+  check('落定后不在默认列表里', store.list().map(r => r.turn), [9])
+
+  check('还没到期时 expire 不动它', store.expire(2000 + ttl - 1), 0)
+  check('到期后 expire 丢掉它', store.expire(2000 + ttl), 1)
+  check('丢掉的状态是 dropped', store.list('dropped').map(r => r.id), [second])
+  check('丢掉后未落定为零', store.openCount(), 0)
   db.close()
 }
 

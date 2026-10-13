@@ -1,10 +1,13 @@
 /**
- * 数据存储层：完整消息、感知历史、当前会话指针。
+ * 数据存储层：完整消息、感知历史、待办。
  *
  * ## 为什么单独一层
  *
  * 和 `schema.ts` 一样，**不认识 cordis** —— 只吃一个 `DatabaseSync`。
- * 所以能用内存库离线自检（`tests/stores.spec.ts`）。
+ * 所以能用内存库离线自检（`tests/db.spec.ts`）。
+ *
+ * （"当前注意力焦点"曾经在这里，后来迁到了 `ctx.pointer` —— 它要人能直接改，
+ * 判据是"要不要给人改"，所以落在 `data/` 的一个文件里，不进库。）
  *
  * ## 搜索为什么要"带上下文区间"
  *
@@ -317,5 +320,168 @@ export class PerceptionStore {
   markPulled(ids: readonly number[]): void {
     const stmt = this.#db.prepare('UPDATE perception_history SET pulled = 1 WHERE id = ?')
     for (const id of ids) stmt.run(id)
+  }
+}
+
+/** 待办的状态。 */
+export type PlanState =
+  /** 已写出来、也浮进了上下文，等她处理。 */
+  | 'surfaced'
+  /** 她处理掉了。 */
+  | 'done'
+  /** 丢掉了 —— 过期，或者那件事已经过去（群里早聊完了）。 */
+  | 'dropped'
+
+/** 一条待办。 */
+export interface PlanRow {
+  /** 主键。 */
+  readonly id: number
+  /** 中断发生时刻（毫秒）。 */
+  readonly createdAt: number
+  /** 从哪个会话继续 —— 配合 `turn` 回看。 */
+  readonly sessionId: string
+  /** **中断发生前最后完成的那一轮**（是 turn，不是 seq）。 */
+  readonly turn: number
+  /** 那次中断的优先级（诊断用）。 */
+  readonly priority: number
+  /** 刚刚在干什么。 */
+  readonly what: string
+  /** 因为什么中断了。 */
+  readonly why: string
+  /** 状态。 */
+  readonly state: PlanState
+  /** 生命周期到期时刻（毫秒）。 */
+  readonly expiresAt: number
+  /** 落定时刻（`done` / `dropped` 才有）。 */
+  readonly settledAt?: number | undefined
+}
+
+/** 新建待办时要给的字段。`id` / `state` / `expiresAt` 由 store 生成。 */
+export interface PlanDraft {
+  readonly sessionId: string
+  readonly turn: number
+  readonly priority: number
+  readonly what: string
+  readonly why: string
+  /** 生命周期（毫秒）。到期还没处理就丢掉。 */
+  readonly ttlMs: number
+}
+
+/** 数据库里的行形状（snake_case）。 */
+interface PlanDbRow {
+  id: number
+  created_at: number
+  session_id: string
+  turn: number
+  priority: number
+  what: string
+  why: string
+  state: string
+  expires_at: number
+  settled_at: number | null
+}
+
+/** 把数据库行转成领域形状。 */
+function toPlan(row: PlanDbRow): PlanRow {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    sessionId: row.session_id,
+    turn: row.turn,
+    priority: row.priority,
+    what: row.what,
+    why: row.why,
+    state: row.state as PlanState,
+    expiresAt: row.expires_at,
+    settledAt: row.settled_at ?? undefined,
+  }
+}
+
+/**
+ * 待办。
+ *
+ * 这是**注意力转移模型的恢复路径**（docs/m5-preemption.md §20.7）：
+ * 原任务优先级 `> n`、且中断持续超过 `T` 时写一条，浮进上下文 ——
+ * 于是**下一次唤醒时她会想起来"还有件事没做完"**。
+ *
+ * **正因为有这条恢复路径，主路径才不需要"保证她一定回来"**，
+ * 也才不需要 fork / 结清 / 上下文冻结那一整套。
+ *
+ * ⚠️ **中断那一刻不写这张表**：正文要等 `T` 才知道（写待办的快照 subagent
+ * 到那时才收到命令）。所以那段窗口里**没有任何持久化状态需要存活**。
+ */
+export class PlanStore {
+  readonly #db: DatabaseSync
+
+  /** @param db - 已迁移到最新版的数据库句柄。 */
+  constructor(db: DatabaseSync) {
+    this.#db = db
+  }
+
+  /**
+   * 写一条待办。
+   *
+   * @param draft - 内容。
+   * @param now - 现在（毫秒）。注入以便自检。
+   * @returns 新行的 id。
+   */
+  insert(draft: PlanDraft, now: number): number {
+    const result = this.#db.prepare(`
+      INSERT INTO plan (created_at, session_id, turn, priority, what, why, state, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'surfaced', ?)
+    `).run(
+      now, draft.sessionId, draft.turn, draft.priority, draft.what, draft.why, now + draft.ttlMs,
+    )
+    return Number(result.lastInsertRowid)
+  }
+
+  /**
+   * 列待办，时间降序。
+   *
+   * @param state - 指定状态；省略时只列**还没落定**的（那才是"待办"）。
+   * @returns 待办列表。
+   */
+  list(state?: PlanState): PlanRow[] {
+    const rows = state === undefined
+      ? this.#db.prepare('SELECT * FROM plan WHERE settled_at IS NULL ORDER BY created_at DESC').all()
+      : this.#db.prepare('SELECT * FROM plan WHERE state = ? ORDER BY created_at DESC').all(state)
+    return (rows as unknown as PlanDbRow[]).map(toPlan)
+  }
+
+  /**
+   * 落定一条。
+   *
+   * @param id - 待办 id。
+   * @param state - `done`（处理掉了）或 `dropped`（那件事已经过去）。
+   * @param now - 现在（毫秒）。
+   * @returns 是否真的改到了行（已落定的不会被改第二次）。
+   */
+  settle(id: number, state: 'done' | 'dropped', now: number): boolean {
+    const result = this.#db.prepare(
+      'UPDATE plan SET state = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL',
+    ).run(state, now, id)
+    return Number(result.changes) > 0
+  }
+
+  /**
+   * 把过期的丢掉。**TTL 到了就别再端上来了** —— 那件事已经过去了，
+   * 端上来只会让她对着一条死事发呆。
+   *
+   * @param now - 现在（毫秒）。
+   * @returns 丢掉了几条。
+   */
+  expire(now: number): number {
+    const result = this.#db.prepare(
+      "UPDATE plan SET state = 'dropped', settled_at = ? WHERE settled_at IS NULL AND expires_at <= ?",
+    ).run(now, now)
+    return Number(result.changes)
+  }
+
+  /** 还没落定的有几条（诊断用）。 */
+  openCount(): number {
+    const row = this.#db.prepare(
+      'SELECT COUNT(*) AS n FROM plan WHERE settled_at IS NULL',
+    ).get() as { n: number }
+    return row.n
   }
 }

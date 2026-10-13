@@ -4,8 +4,8 @@
  * ## 它是什么 / 不是什么
  *
  * **是**：一个**领域无关**的持久化设施。它 `provide('db')`，对上层暴露 `this.ctx.db`，
- * 提供两样存储：完整消息存档（搜索工具的数据源）、感知历史。
- * （当前会话指针已迁到 ctx.pointer —— 见 PLOS/docs/m5-preemption.md §6。）
+ * 提供三样存储：完整消息存档（搜索工具的数据源）、感知历史、**待办**。
+ * （"当前注意力焦点"已迁到 `ctx.pointer` —— 它要人能直接改，所以落在 `data/` 的文件里。）
  *
  * **不是**：它**不认识 QQ，也不认识任何领域**。表结构是通用的
  * （`platform` 是列而不是库），谁需要谁调。这是用户明确要求的
@@ -47,7 +47,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { migrate } from './schema.ts'
-import { MessageStore, PerceptionStore } from './stores.ts'
+import { MessageStore, PerceptionStore, PlanStore } from './stores.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -66,6 +66,8 @@ export class Db extends Service {
   readonly messages: MessageStore
   /** 感知历史。 */
   readonly perception: PerceptionStore
+  /** 待办 —— 注意力转移模型的**恢复路径**（docs/m5-preemption.md §20.7）。 */
+  readonly plan: PlanStore
 
   /**
    * 原始句柄。给需要写自定义查询的领域用（比如将来的记忆 / 媒体表）。
@@ -94,6 +96,7 @@ export class Db extends Service {
 
     this.messages = new MessageStore(handle)
     this.perception = new PerceptionStore(handle)
+    this.plan = new PlanStore(handle)
   }
 
   /**

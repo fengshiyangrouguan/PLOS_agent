@@ -119,6 +119,33 @@ export const MIGRATIONS: readonly Migration[] = [
       db.exec('CREATE INDEX IF NOT EXISTS idx_events_time ON events (time)')
       db.exec('CREATE INDEX IF NOT EXISTS idx_events_conversation ON events (conversation_id)')
       db.exec('CREATE INDEX IF NOT EXISTS idx_events_user ON events (user_id)')
+
+      // ── 待办（plan） ──────────────────────────────────────────────
+      // 注意力转移模型（docs/m5-preemption.md §20）：**原任务优先级 > n**、
+      // 且中断**持续超过 T** 时，由快照 subagent 写一条待办并浮进上下文，
+      // 供下一次唤醒时"想起来还有件事没做完"。
+      //
+      // `session_id` + `turn` 是**回看用的坐标**（不是 seq —— 人说的"轮"是 turn，
+      // 而且 DSH 的 session-turn-outline 本来就以 turn 组织）；检索工具按它取回上下文。
+      //
+      // ⚠️ **中断那一刻不写这张表**：正文要等 T 才知道（快照 subagent 到那时才收到
+      // "写待办"的命令）。所以那段窗口里**没有任何持久化状态需要存活** ——
+      // 崩了就崩了，而她的会话本来就还留着那件被打断的事。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS plan (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at INTEGER NOT NULL,
+          session_id TEXT    NOT NULL,
+          turn       INTEGER NOT NULL,
+          priority   INTEGER NOT NULL,
+          what       TEXT    NOT NULL,
+          why        TEXT    NOT NULL,
+          state      TEXT    NOT NULL DEFAULT 'surfaced',
+          expires_at INTEGER NOT NULL,
+          settled_at INTEGER
+        )
+      `)
+      db.exec('CREATE INDEX IF NOT EXISTS idx_plan_state ON plan (state, expires_at)')
     },
   },
 ]

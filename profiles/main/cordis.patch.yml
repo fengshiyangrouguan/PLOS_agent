@@ -87,6 +87,20 @@
           qq-adapter: 3
 
 
+    # ── 设施 ─────────────────────────────────────────────────────────
+    # 数据库设施：**领域无关**（不认识 QQ），provide('db')。
+    # 用 Node 内置的 node:sqlite，零依赖 —— 跟着 DSH 自己走
+    # （packages/session/session-query-sqlite 也是这么用的）。
+    #
+    # 路径从环境变量取，**不落进版本库**：$DSH_HOME/data/plos.db。
+    #
+    # 注意：迁移在激活时跑（幂等），但 disposer **只关连接、不删表** ——
+    # 我们的 HMR 会让插件在改文件时卸载重装，删表等于每改一次清空一次库。
+    - id: db
+      name: './plugins/db/index.ts'
+      config:
+        path: !!js "process.env.DSH_HOME + '/data/plos.db'"
+        verbose: true
     # ── QQ 领域 ──────────────────────────────────────────────────────
     # 目录结构照 DSH 的分法：**分组在「包」级别**（qq/adapter、qq/tools…），
     # 每个包内部保持扁平 —— DSH 的 packages/<group>/<pkg>/src 也是平的

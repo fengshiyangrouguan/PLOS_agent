@@ -125,8 +125,10 @@ export const MIGRATIONS: readonly Migration[] = [
       // 且中断**持续超过 T** 时，由快照 subagent 写一条待办并浮进上下文，
       // 供下一次唤醒时"想起来还有件事没做完"。
       //
-      // `session_id` + `turn` 是**回看用的坐标**（不是 seq —— 人说的"轮"是 turn，
-      // 而且 DSH 的 session-turn-outline 本来就以 turn 组织）；检索工具按它取回上下文。
+      // **回看坐标是两列，各自一个消费者**：
+      //   `turn` —— 给人 / 给模型看的说法（"从第 7 轮继续"）
+      //   `seq`  —— **给工具的坐标**。DSH 原生的 `session_event_read` 收的是 `seq`，
+      //             所以这一列是**必须存**的那个；`turn` 只是更好读。
       //
       // ⚠️ **中断那一刻不写这张表**：正文要等 T 才知道（快照 subagent 到那时才收到
       // "写待办"的命令）。所以那段窗口里**没有任何持久化状态需要存活** ——
@@ -137,6 +139,7 @@ export const MIGRATIONS: readonly Migration[] = [
           created_at INTEGER NOT NULL,
           session_id TEXT    NOT NULL,
           turn       INTEGER NOT NULL,
+          seq        INTEGER NOT NULL,
           priority   INTEGER NOT NULL,
           what       TEXT    NOT NULL,
           why        TEXT    NOT NULL,

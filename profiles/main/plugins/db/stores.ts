@@ -340,8 +340,10 @@ export interface PlanRow {
   readonly createdAt: number
   /** 从哪个会话继续 —— 配合 `turn` 回看。 */
   readonly sessionId: string
-  /** **中断发生前最后完成的那一轮**（是 turn，不是 seq）。 */
+  /** **中断发生前最后完成的那一轮** —— 给人 / 给模型看的说法。 */
   readonly turn: number
+  /** **给工具的坐标**：DSH 原生的 `session_event_read` 收的是 `seq`。 */
+  readonly seq: number
   /** 那次中断的优先级（诊断用）。 */
   readonly priority: number
   /** 刚刚在干什么。 */
@@ -360,6 +362,8 @@ export interface PlanRow {
 export interface PlanDraft {
   readonly sessionId: string
   readonly turn: number
+  /** 给工具的坐标（`session_event_read(seq=…)`）。 */
+  readonly seq: number
   readonly priority: number
   readonly what: string
   readonly why: string
@@ -373,6 +377,7 @@ interface PlanDbRow {
   created_at: number
   session_id: string
   turn: number
+  seq: number
   priority: number
   what: string
   why: string
@@ -388,6 +393,7 @@ function toPlan(row: PlanDbRow): PlanRow {
     createdAt: row.created_at,
     sessionId: row.session_id,
     turn: row.turn,
+    seq: row.seq,
     priority: row.priority,
     what: row.what,
     why: row.why,
@@ -427,10 +433,11 @@ export class PlanStore {
    */
   insert(draft: PlanDraft, now: number): number {
     const result = this.#db.prepare(`
-      INSERT INTO plan (created_at, session_id, turn, priority, what, why, state, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'surfaced', ?)
+      INSERT INTO plan (created_at, session_id, turn, seq, priority, what, why, state, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'surfaced', ?)
     `).run(
-      now, draft.sessionId, draft.turn, draft.priority, draft.what, draft.why, now + draft.ttlMs,
+      now, draft.sessionId, draft.turn, draft.seq, draft.priority,
+      draft.what, draft.why, now + draft.ttlMs,
     )
     return Number(result.lastInsertRowid)
   }

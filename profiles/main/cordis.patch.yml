@@ -163,6 +163,22 @@
       config:
         idleIntervalMs: 1800000
         persist: true
+    # ── 工具 ─────────────────────────────────────────────────────────
+    # 会话历史的检索工具（**DSH 原生**，一口气五个）：
+    #   session_search / session_event_search / session_trace /
+    #   session_event_trace / session_event_read
+    #
+    # ★ 我们为什么要它：待办（`plan` 表）里**只记 `sessionId + seq`，不把那段
+    # 上下文塞回来** —— 需要细节时由她自己调 `session_event_read` 去取。
+    # 这正是"**忘了细节但没丢事**"（§8.6 E3）的落地方式。
+    #
+    # 服务侧（`session-query-sqlite`）本来就在装配里，缺的只是这个**模型可见的
+    # 消费者**。它还会注册一段 `tool:session-query` 提示词（告诉模型什么时候用）——
+    # ⚠️ 那段**要加进 `data/tcb.json` 的段落白名单**，否则会被 TCB 的过滤器挡掉，
+    # 工具在、但模型不知道该用。
+    - id: tool-session-query
+      name: '@deepseek-ai/dsh-tool-session-query'
+
     # ── QQ 领域 ──────────────────────────────────────────────────────
     # 目录结构照 DSH 的分法：**分组在「包」级别**（qq/adapter、qq/tools…），
     # 每个包内部保持扁平 —— DSH 的 packages/<group>/<pkg>/src 也是平的

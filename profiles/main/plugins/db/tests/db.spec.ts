@@ -235,7 +235,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   const ttl = 24 * 60 * 60 * 1000
 
   const id = store.insert({
-    sessionId: 'plos-baiyu', turn: 7, priority: 20,
+    sessionId: 'plos-baiyu', turn: 7, seq: 123, priority: 20,
     what: '正在写 M5 的接线', why: '群里有人 @ 我', ttlMs: ttl,
   }, 1000)
   check('插入返回 id', id, 1)
@@ -245,11 +245,15 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
     'surfaced',
   )
   check('生命周期 = now + ttl', store.list()[0]?.expiresAt, 1000 + ttl)
-  check('★ 回看坐标记的是 turn，不是 seq', store.list()[0]?.turn, 7)
+  check(
+    '★ 回看坐标两列都在：turn 给人看，seq 给工具（session_event_read 收的是 seq）',
+    [store.list()[0]?.turn, store.list()[0]?.seq],
+    [7, 123],
+  )
   check('未落定计数', store.openCount(), 1)
 
   const second = store.insert({
-    sessionId: 'plos-baiyu', turn: 9, priority: 80,
+    sessionId: 'plos-baiyu', turn: 9, seq: 140, priority: 80,
     what: '在回私聊', why: '终端要修 bug', ttlMs: ttl,
   }, 2000)
   check('时间降序', store.list().map(r => r.turn), [9, 7])

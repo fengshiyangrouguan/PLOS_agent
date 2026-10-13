@@ -40,8 +40,13 @@
 /** 待补打的自述。 */
 const pending: string[] = []
 
-/** 是否已经补打过。 */
-let flushed = false
+/**
+ * 补打时用的 logger。
+ *
+ * **它同时是"是否已补打"的标志** —— 两个状态用一个变量表达，
+ * 就不会出现"标志说已补打、logger 却还没设"的中间态。
+ */
+let startupLogger: { info: (message: string) => void } | undefined
 
 /**
  * 登记一行启动自述。**此时不打印**（那一刻没有终端出口）。
@@ -51,9 +56,9 @@ let flushed = false
  * @param text - 要登记的自述。
  */
 export function recordStartupLine(text: string): void {
-  if (flushed) {
-    // 补打之后才登记的（重载场景）：直接交给 logger，它有出口。
-    startupLogger?.info(text)
+  if (startupLogger !== undefined) {
+    // 补打之后才登记的（重载场景）：直接交给 logger，它已经有出口。
+    startupLogger.info(text)
     return
   }
   pending.push(text)
@@ -66,12 +71,8 @@ export function recordStartupLine(text: string): void {
  * @returns 补打的条数。
  */
 export function flushStartupLines(logger: { info: (message: string) => void }): number {
-  flushed = true
   startupLogger = logger
   const lines = pending.splice(0)
   for (const line of lines) logger.info(line)
   return lines.length
 }
-
-/** 补打之后登记的走它（重载场景）。 */
-let startupLogger: { info: (message: string) => void } | undefined

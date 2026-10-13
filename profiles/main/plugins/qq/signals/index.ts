@@ -30,17 +30,22 @@
  * 旧的 `attention` 在这里调 `ctx.qq.drain()`（读即已读），等于"感知层替你点进去了"。
  * M3 把响应侧改成订阅感知条目之后，这条路径已经不存在了；本插件保证它不再回来。
  *
- * ## 群名：字段接通了，但 SnowLuma 实际不发
+ * ## 群名：**能拿到**（这里曾有一段错误结论）
  *
- * `QqIncoming.groupName` 已存在 —— adapter 从事件的**非标准字段 `peerName`** 取
- * （adapter/index.ts:458，`protocol/index.ts:64` 有说明：标准 OneBot v11 没有群名，
- * 常规做法是调 `get_group_info`，用这个字段可以省一次往返，"取不到就不取"）。
+ * ⚠️ 本节曾写"实测结论：取不到，所以 SnowLuma 的事件里没有群名"。
+ * **那是错的** —— 错在**字段名**：SnowLuma 发的是**非标准的 `group_name`**，
+ * 而 adapter 当时只读 `peerName`，所以永远是空。
  *
- * **实测结论：取不到。** 落库的 `conversation_name` 三个会话全是空，
- * 渲染回落成 `群「871234（id:871234）」`。所以 SnowLuma 的事件里没有 `peerName`。
+ * **抓一次原始 JSON 即可定论**（这件事本身就是教训：数据能直接看就不要反推，
+ * 见 AGENTS.md 第一节）。修好之后渲染正常：
  *
- * 模板仍然写成 `{name}（id:{id}）` 并在 `nameOf()` 里回落 id —— 这样：
- * - 上游哪天带了群名，不用改代码就有了
+ *     群「古乐の秘♂密基地（id:728636404）」里有 2 条新消息
+ *
+ * 现在的形状：`QqIncoming.groupName` 由 adapter 从 `group_name` 取
+ * （`peerName` 留作兼容回落，别的协议端可能有），落库进 `conversation_name`。
+ *
+ * 模板写成 `{name}（id:{id}）` 并在 `nameOf()` 里回落 id —— 这样：
+ * - 上游哪天不带群名，回落成 id，不会炸
  * - 不带也不缺字段（`applyTemplate` 对缺字段是抛错的）
  *
  * 真要群名就得给 adapter 加一个带缓存的 `get_group_info` 查询（一次往返 + 缓存）。

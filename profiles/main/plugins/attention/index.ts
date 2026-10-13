@@ -17,17 +17,22 @@
  * 完全绕过了感知层。所以它天生只能服务 QQ，新闻/手表/手机推上来的东西全收不到，
  * 而且它自己渲染消息正文、往正文里硬塞行为指令。
  *
- * ## `priority: 0` 怎么交付（这里的关键判断）
+ * ## `priority: 0` 怎么交付（**不需要区分"谁发起的拉取"**）
  *
- * `0` 的语义是"**不因它自己而唤醒**"，不是"永不交付"。所以：
+ * `0` 的语义是「**不产生它自己的那次唤醒**」，不是「永不交付」——
+ * 0 级的领域**根本没有推唤醒信号的路径**（推信号就得带 > 0 的优先级），
+ * 它的内容只搭下一次唤醒的便车。
  *
- * | 本轮由谁发起 | 怎么做 |
- * |:--|:--|
- * | `idle`（闲时定时器） | **要唤醒** —— 这就是"她定期四处看看"。0 级内容随这次交付 |
- * | `signal`（领域推的唤醒信号） | 只有 `highest > 0` 才唤醒；纯 0 级就留在队列里，等下次闲时 |
+ * 而拉取永远返回**全部当前信号**，所以：
  *
- * 没有 `trigger` 这个区分，0 级条目就永远交付不出去（它不唤醒，而它又只能
- * 从闲时拉取里产生）。
+ * ```
+ * 信号发起的拉取  ⟹  那条被推的信号必在结果里且 priority > 0  ⟹  highest > 0
+ * highest === 0   ⟹  不可能是信号发起的  ⟹  只可能是定时器（那次"四处看看"本来就要叫她）
+ * ```
+ *
+ * **所以交付规则里不需要"谁发起的"这个信息 —— 它可以由 `highest` 推出来。**
+ * 给条目塞一个 `trigger` 字段是把可推导的东西又存了一份，是冗余。
+ * 规则因此化简成一句：**收到条目就尝试交付队首**。
  *
  * ## 队列不变量
  *
@@ -141,7 +146,10 @@ export class Attention extends Service {
   }
 
   /**
-   * 收一条感知条目：入队，然后按 `trigger` 与优先级决定要不要现在交付。
+   * 收一条感知条目：入队，然后尝试交付队首。
+   *
+   * **不区分"谁发起的拉取"** —— 那个信息可由 `highest` 推出（见模块注释）。
+   * 0 级条目照常交付：它只可能来自定时器，而那次"四处看看"本来就是要叫她的。
    *
    * @param notice - 感知条目。
    */
@@ -149,15 +157,11 @@ export class Attention extends Service {
     if (notice.signals.length === 0) return
     this.queue.push(notice)
 
-    // 闲时定时器发起的那次**要交付** —— 0 级内容正是靠它送达。
-    // 领域推的唤醒信号只有在真的有非 0 级时才叫醒她。
-    if (notice.trigger === 'signal' && notice.highest === 0) return
-
     const item = this.queue.drain()
     if (item === undefined) return
     if (this.deliver(item)) {
       this.ctx.logger.info(
-        `attention: 已交付（trigger=${notice.trigger}，highest=${String(notice.highest)}，`
+        `attention: 已交付（highest=${String(item.notice.highest)}，`
         + `剩 ${String(this.queue.size)} 条待交付）`,
       )
     }

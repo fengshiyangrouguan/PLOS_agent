@@ -56,7 +56,6 @@ function check(label: string, actual: unknown, expected: unknown): void {
 function notice(tag: string, highest: number, signals = 1): PerceptionNotice {
   return {
     at: 0,
-    trigger: 'signal',
     text: tag,
     signals: Array.from({ length: signals }, (_unused, i) => ({
       kind: 'k', data: {}, source: `s${String(i)}`, domain: 'D', priority: highest, line: tag,

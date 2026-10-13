@@ -8,6 +8,36 @@ importers:
 
   .:
     dependencies:
-      '@deepseek-ai/cordis-plugin-logger-console':
-        specifier: link:..\..\..\deepseek-harness\vendor\logger-console
-        version: link:../../../deepseek-harness/vendor/logger-console
+      dsh-logbook:
+        specifier: ^0.1.0
+        version: 0.1.0
+
+packages:
+
+  '@deepseek-ai/cosmokit@1.8.5':
+    resolution: {integrity: sha512-LXsrlem9z8dq4sLflj2yuCuYX7KqhdzF5hZly3eZyuTo8d6oDSOXuEgC5DbQWKW+lksm6zmOutQLsP/ma6wR6A==}
+
+  '@deepseek-ai/schemastery@3.18.4':
+    resolution: {integrity: sha512-SSXO6tYuyrIqKVbmOnIq0s+riUywYzouFMcnBluHF9n4KMo2G8HvEzhCYj6pj2617/glOjbJuVInJ9hfONsjkg==}
+
+  '@standard-schema/spec@1.1.0':
+    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  dsh-logbook@0.1.0:
+    resolution: {integrity: sha512-zEfXn23qpLWlvXX3Jpfi8NMzRvjXCP9i/s+1Y6uoxtIL8SRgE19PXAYKHOF2XPy5zkcFSyo1DnFNqEQbLrN2GA==}
+    engines: {node: '>=22'}
+
+snapshots:
+
+  '@deepseek-ai/cosmokit@1.8.5': {}
+
+  '@deepseek-ai/schemastery@3.18.4':
+    dependencies:
+      '@deepseek-ai/cosmokit': 1.8.5
+      '@standard-schema/spec': 1.1.0
+
+  '@standard-schema/spec@1.1.0': {}
+
+  dsh-logbook@0.1.0:
+    dependencies:
+      '@deepseek-ai/schemastery': 3.18.4

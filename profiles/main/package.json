@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@deepseek-ai/cordis-plugin-logger-console": "link:..\\..\\..\\deepseek-harness\\vendor\\logger-console"
+    "dsh-logbook": "^0.1.0"
   },
   "dsh": {
     "profile": {
       "bundles": [
-        "@deepseek-ai/dsh-base"
+        "@deepseek-ai/dsh-base",
+        "dsh-logbook"
       ]
     }
   }

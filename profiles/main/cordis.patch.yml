@@ -74,17 +74,39 @@
 #   c) 查清 vendored cordis 插件为何不进安装作用域（根因，最彻底）
 # 修好后删掉下面这条 disable，并恢复 logger-console 那一行。
 
+# 日志出口：dsh-logbook（`dsh plugin add dsh-logbook` 已把它加进 bundles，
+# 这一行是**覆盖**它的配置 —— 所以必须是**顶层**条目，不能放进 `- insert:`）。
+#
+# **换掉了 cordis 自带的 logger-console**，两层原因：
+#
+# 一、**cordis 的数值级别是反直觉的**（error=0 info=1 warn=2 debug=3），
+#     过滤是 `if (targetLevel < level) continue` —— 于是 `default: 1`
+#     会**静默吞掉所有 warn 和 debug**。我们在 attention / qq-signals 里
+#     写的 warn 一直没出来。logbook 的语义是"某级及更严重"，绕开了这个坑。
+#
+# 二、**cordis 的 exporter 处置有 bug**（上游已确认）：`exporter()` 的 disposer
+#     **摘掉的是最近注册的那个而不是自己的**，所以**任何插件重载都可能摘掉
+#     别的插件的日志出口**。我们开着 HMR —— 这很可能就是 db / tcb / pointer
+#     的 `Service.init` 启动日志消失的机制（它们跑在挂载早期）。
+#
+# ⚠️ 还有一条上游 bug 仍在：内置 buffer 收不到 warn/debug。
+# logbook 自己注册全捕获出口 + 从 buffer 补种，所以绕过它。
+#
+# ⚠️ **踩过的坑**：这一行一旦写进 `- insert:`，就变成"插入一个没有 name 的新行"，
+# 于是 compatibility-preflight 的 `name.startsWith('cordis:')` 读到 undefined 直接崩，
+# 整行被禁用 —— 表现是"日志全没了"，很容易误判成 logbook 不工作。
+- id: logs
+  config:
+    ring: 2000
+    stderr:
+      enabled: true
+      types:
+        # 某级及更严重：error → warn → info → debug
+        default: info
+        # 开发期看 qq-adapter 的连接与收消息细节；上线前删掉这行。
+        qq-adapter: debug
+
 - insert:
-    # 开发用：装上 cordis 的 console logger exporter。
-    # dsh-base 里没有这一行——不装的话 ctx.logger 的输出没有去处（logger 服务本身是
-    # cordis 核心，但 exporter 是独立插件）。级别：0=ERROR 1=INFO 2=WARN 3=DEBUG。
-    - id: logger-console
-      name: '@deepseek-ai/cordis-plugin-logger-console'
-      config:
-        levels:
-          default: 1
-          # 开发期看 qq-adapter 的连接与收消息细节；上线前调回 1。
-          qq-adapter: 3
 
 
     # ── 设施 ─────────────────────────────────────────────────────────

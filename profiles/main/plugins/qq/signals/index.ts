@@ -30,11 +30,22 @@
  * 旧的 `attention` 在这里调 `ctx.qq.drain()`（读即已读），等于"感知层替你点进去了"。
  * M3 把响应侧改成订阅感知条目之后，这条路径已经不存在了；本插件保证它不再回来。
  *
- * ## 已知未做
+ * ## 群名：字段接通了，但 SnowLuma 实际不发
  *
- * 渲染样例里那句 `群「古乐の秘♂密基地（id:xxx）」` 的**群名**目前拿不到 ——
- * `QqIncoming` 不带群名，要另外调 OneBot 的 `get_group_info` 并缓存。
- * 现在只渲染 id。等需要时给 adapter 加一个带缓存的名字查询。
+ * `QqIncoming.groupName` 已存在 —— adapter 从事件的**非标准字段 `peerName`** 取
+ * （adapter/index.ts:458，`protocol/index.ts:64` 有说明：标准 OneBot v11 没有群名，
+ * 常规做法是调 `get_group_info`，用这个字段可以省一次往返，"取不到就不取"）。
+ *
+ * **实测结论：取不到。** 落库的 `conversation_name` 三个会话全是空，
+ * 渲染回落成 `群「871234（id:871234）」`。所以 SnowLuma 的事件里没有 `peerName`。
+ *
+ * 模板仍然写成 `{name}（id:{id}）` 并在 `nameOf()` 里回落 id —— 这样：
+ * - 上游哪天带了群名，不用改代码就有了
+ * - 不带也不缺字段（`applyTemplate` 对缺字段是抛错的）
+ *
+ * 真要群名就得给 adapter 加一个带缓存的 `get_group_info` 查询（一次往返 + 缓存）。
+ * **但注意 id 反而是更可靠的标识** —— 用户实测过 AI 会把「秘密の基地」打成
+ * 「秘密的基地」（decisions.md 的 TODO #1），名字对模型是有损的。
  *
  * @module qq/signals
  */
@@ -73,13 +84,22 @@ async function archive(ctx: Context, incoming: QqIncoming): Promise<void> {
     messageId: incoming.messageId,
     conversationId: conversationIdOf(incoming),
     conversationType: incoming.groupId === undefined ? 'private' : 'group',
-    // 群名/会话名拿不到（见模块注释），先留空。
+    conversationName: incoming.groupName,
     senderId: incoming.userId,
     senderName: incoming.senderName,
     time: incoming.time * 1000,
     content: text,
     segments: JSON.stringify(incoming.segments),
   })
+}
+
+/**
+ * 算出一条消息所属的规范化会话 id。
+ * @param incoming - 入站消息。
+ * @returns `group:<群号>` 或 `private:<QQ号>`。
+ */
+function nameOf(last: QqIncoming | undefined, fallback: string): string {
+  return last?.groupName ?? fallback
 }
 
 /**
@@ -120,7 +140,7 @@ function collect(ctx: Context): Signal[] {
         kind: 'mention',
         source: conversation,
         priority: PRIORITY_MENTION,
-        data: { id: parsed.id, sender: last?.senderName ?? '有人' },
+        data: { name: nameOf(last, parsed.id), id: parsed.id, sender: last?.senderName ?? '有人' },
       })
       continue
     }
@@ -139,7 +159,7 @@ function collect(ctx: Context): Signal[] {
       kind: 'group',
       source: conversation,
       priority: PRIORITY_GROUP,
-      data: { id: parsed.id, count: unread },
+      data: { name: nameOf(last, parsed.id), id: parsed.id, count: unread },
     })
   }
   return signals
@@ -165,9 +185,9 @@ export function apply(ctx: Context): void {
     domain: 'QQ',
     priority: PRIORITY_GROUP,
     templates: {
-      mention: '群「{id}」里有人 @ 了你',
+      mention: '群「{name}（id:{id}）」里有人 @ 了你',
       private: '{sender}(id:{id}) 私聊了你',
-      group: '群「{id}」里有 {count} 条新消息',
+      group: '群「{name}（id:{id}）」里有 {count} 条新消息',
     },
     pull: () => collect(ctx),
   }))

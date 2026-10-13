@@ -146,6 +146,14 @@
     - id: qq-tools
       name: './plugins/qq/tools/index.ts'
 
+    # 领域 → 感知：注册信号源 + 消息存档。
+    #
+    # 取代旧的"推内容"：领域只暴露**结构化状态**，由感知层统一渲染。
+    # pull() 用 peek()/unread()，**都不推进游标** —— 看不等读过；
+    # 只有 qq_read 那个工具用 drain()。（旧的 attention 在这里调 drain()，
+    # 等于"感知层替你点进去了"，M3 改结构后这条路径已不存在。）
+    - id: qq-signals
+      name: './plugins/qq/signals/index.ts'
     # ③ 提示词段落：告诉白羽她在 QQ 上。
     #
     # TODO（docs/design.md §二）：现在的措辞是"必须调用 qq_send_message"，

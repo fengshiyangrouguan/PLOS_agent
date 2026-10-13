@@ -39,6 +39,11 @@ import { renderNotice, type DomainGroup } from './render.ts'
 import type { PerceptionNotice, SignalSource } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** 采集与渲染设施。领域无关 —— 它只知道"有个领域注册了信号源"。 */
+    perception: Perception
+  }
+
   interface Events {
     /**
      * 感知层渲染好一条简报。

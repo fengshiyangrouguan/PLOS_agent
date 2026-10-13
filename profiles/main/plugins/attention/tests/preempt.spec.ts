@@ -7,20 +7,25 @@
  * node --import tsx/esm E:\project\PLOS\PLOS_agent\profiles\main\plugins\attention\tests\preempt.spec.ts
  * ```
  *
- * 能这么跑是因为 `preempt.ts` 只 import 一个常量，运行时零依赖。
+ * 能这么跑是因为 `preempt.ts` 只 import 两个常量，运行时零依赖。
  *
  * ## 这里重点验什么
  *
- * **三条轴各自一个职责**（设计 §4.2/§4.3），而 80 那条线最容易被理解错 ——
- * 它不是"能不能抢占"（任意优先级差都能抢占），它是"**收不收尾**"。
+ * 模型已从"RTOS 抢占"换成"**注意力转移**"（docs/m5-preemption.md §20），
+ * 所以这份自检盯的是新模型的三件事：
  *
- * 以及一个容易漏的边界：**她忙的时候，0 级条目不该抢占**。
+ * 1. **`m` 那条线管的是"要不要立刻放下手上的事"**，不是"能不能被牵走"
+ *    —— 任意优先级差都会牵走注意力，`m` 只决定用软的还是硬的。
+ * 2. **`n` 那条线管的是"要不要记待办"**，判据是**原任务的优先级**
+ *    （不是中断的优先级）。0 级原任务不记 —— 那是用户的原型情形①。
+ * 3. **`WRAPUP_HINT` 里不许再出现"结束该 turn"** —— 那句是 fork 模型的遗留，
+ *    在无 fork 的新模型里会教她停下来。这是防回归。
  *
  * @module attention/preempt.spec
  */
 
 import assert from 'node:assert/strict'
-import { WRAPUP_HINT, planPreemption, withWrapupHint } from '../preempt.ts'
+import { WRAPUP_HINT, planTransfer, withHint } from '../preempt.ts'
 
 let passed = 0
 let failed = 0
@@ -44,55 +49,116 @@ function check(label: string, actual: unknown, expected: unknown): void {
   }
 }
 
-// ── 她闲着：直接交付，没有抢占 ──────────────────────────────────────
-{
-  check('空闲 + 0 级 → 交付', planPreemption('idle', 0), { kind: 'deliver' })
-  check('空闲 + 20 → 交付', planPreemption('idle', 20), { kind: 'deliver' })
-  check('空闲 + 100 → 交付', planPreemption('idle', 100), { kind: 'deliver' })
+/** 断言为真。 */
+function checkTrue(label: string, actual: boolean): void {
+  check(label, actual, true)
 }
 
-// ── ★ 她忙 + 0 级：不抢占，排队 ────────────────────────────────────
+// ── 她闲着：直接交付，没有"转移"可言 ────────────────────────────────
 {
-  check('★ 忙碌 + 0 级 → 排队（0 级不产生抢占）', planPreemption('running', 0), { kind: 'queue' })
+  check('空闲 + 0 级 → 交付', planTransfer('idle', 0, 0), { kind: 'deliver' })
+  check('空闲 + 20 → 交付', planTransfer('idle', 0, 20), { kind: 'deliver' })
+  check('空闲 + 100 → 交付', planTransfer('idle', 0, 100), { kind: 'deliver' })
+  check('空闲时原任务优先级无关', planTransfer('idle', 99, 100), { kind: 'deliver' })
 }
 
-// ── 她忙 + 1..79：允许先收尾 ───────────────────────────────────────
+// ── ★ 她忙 + 0 级：不牵走注意力，排队 ──────────────────────────────
 {
-  check('忙碌 + 1 → 先收尾', planPreemption('running', 1), { kind: 'wrapup-then-preempt' })
-  check('忙碌 + 20（QQ 的 @）→ 先收尾', planPreemption('running', 20), { kind: 'wrapup-then-preempt' })
-  check('忙碌 + 79 → 先收尾（79 还没到线）', planPreemption('running', 79), { kind: 'wrapup-then-preempt' })
+  check('★ 忙碌 + 0 级 → 排队（0 级不产生自己的唤醒）', planTransfer('running', 0, 0), { kind: 'queue' })
+  check('★ 忙碌 + 0 级，原任务再高也不记待办', planTransfer('running', 80, 0), { kind: 'queue' })
 }
 
-// ── ★ 她忙 + ≥80：立即执行，不给收尾 ───────────────────────────────
+// ── 她忙 + 1..79：软转移（steer），要不要记待办看原任务 ──────────────
 {
-  check('★ 忙碌 + 80 → 立即接管', planPreemption('running', 80), { kind: 'preempt-now' })
-  check('忙碌 + 100 → 立即接管', planPreemption('running', 100), { kind: 'preempt-now' })
+  check(
+    '忙碌 + 20，原任务是 0 级 → steer，★不记待办（情形①：群聊被打断）',
+    planTransfer('running', 0, 20),
+    { kind: 'steer', record: false },
+  )
+  check(
+    '忙碌 + 20，原任务是 20 级 → steer，★记待办（情形②：私聊被终端打断）',
+    planTransfer('running', 20, 20),
+    { kind: 'steer', record: true },
+  )
+  check(
+    '忙碌 + 79 → 还是软转移（79 < 80）',
+    planTransfer('running', 20, 79),
+    { kind: 'steer', record: true },
+  )
 }
 
-// ── ★ 80 不是"能不能抢占"那条线 ────────────────────────────────────
+// ── ★ 她忙 + ≥80：硬切（cancel），不给收尾机会 ──────────────────────
 {
-  // 79 也能抢占（plan 不是 queue/deliver），只是允许收尾。
-  // 这条断言防的是"把 80 当成抢占门槛"这个最常见的误读。
-  check('★ 79 也抢占，只是允许收尾',
-    planPreemption('running', 79).kind === 'queue', false)
-  check('★ 80 与 79 的差别只在收尾',
-    [planPreemption('running', 79).kind, planPreemption('running', 80).kind],
-    ['wrapup-then-preempt', 'preempt-now'])
+  check(
+    '★ 忙碌 + 80 → 硬 cancel',
+    planTransfer('running', 20, 80),
+    { kind: 'cancel', record: true },
+  )
+  check(
+    '★ 忙碌 + 100 → 硬 cancel',
+    planTransfer('running', 20, 100),
+    { kind: 'cancel', record: true },
+  )
+  check(
+    '★ 硬 cancel 也会记待办（原任务 > n）',
+    planTransfer('running', 20, 80),
+    { kind: 'cancel', record: true },
+  )
+  check(
+    '★ 原任务 0 级时硬 cancel 仍不记待办',
+    planTransfer('running', 0, 80),
+    { kind: 'cancel', record: false },
+  )
 }
 
-// ── 收尾提示 ────────────────────────────────────────────────────────
+// ── 两个阈值都是可配置的 ────────────────────────────────────────────
 {
-  check('提示里含"你可以选择"（不是命令）', WRAPUP_HINT.includes('你可以选择'), true)
-  check('提示里含"判断当前任务中断情况"', WRAPUP_HINT.includes('判断当前任务中断情况'), true)
-  check('提示里给两个具体例子', WRAPUP_HINT.includes('道别') && WRAPUP_HINT.includes('保存'), true)
+  check(
+    'n 可配：n=10、原任务 5 → 不记',
+    planTransfer('running', 5, 20, { pendingThreshold: 10, urgentThreshold: 80 }),
+    { kind: 'steer', record: false },
+  )
+  check(
+    'n 可配：n=10、原任务 10 → 不记（判据是 > n，不是 >= n）',
+    planTransfer('running', 10, 20, { pendingThreshold: 10, urgentThreshold: 80 }),
+    { kind: 'steer', record: false },
+  )
+  check(
+    'n 可配：n=10、原任务 11 → 记',
+    planTransfer('running', 11, 20, { pendingThreshold: 10, urgentThreshold: 80 }),
+    { kind: 'steer', record: true },
+  )
+  check(
+    'm 可配：m=50 时 60 就硬切',
+    planTransfer('running', 20, 60, { pendingThreshold: 0, urgentThreshold: 50 }),
+    { kind: 'cancel', record: true },
+  )
+  check(
+    'm 可配：m=200 时 100 只是软转移',
+    planTransfer('running', 20, 100, { pendingThreshold: 0, urgentThreshold: 200 }),
+    { kind: 'steer', record: true },
+  )
+}
 
-  const out = withWrapupHint('【QQ】\n群「X」里有人 @ 了你')
-  check('提示拼在正文之后', out.startsWith('【QQ】'), true)
-  check('提示在末尾', out.endsWith(WRAPUP_HINT), true)
-  check('正文与提示之间空一行', out.includes('有人 @ 了你\n\n'), true)
+// ── ★ 防回归：提示里不许再有 fork 模型的残留 ────────────────────────
+{
+  checkTrue('★ WRAPUP_HINT 不再要求她"结束该 turn"', !WRAPUP_HINT.includes('结束该 turn'))
+  checkTrue('★ WRAPUP_HINT 要求她处理完接着做原来的事', WRAPUP_HINT.includes('接着做原来的事'))
+  checkTrue('WRAPUP_HINT 保留"判断是否有必要打断你"', WRAPUP_HINT.includes('打断你'))
+}
 
-  // 正文末尾已有换行时不该留下多余空行
-  check('正文末尾多余换行被吃掉', withWrapupHint('正文\n\n'), `正文\n\n${WRAPUP_HINT}`)
+// ── withHint 把提示放末尾 ───────────────────────────────────────────
+{
+  check(
+    'withHint 拼在末尾（前面只有一条换行）',
+    withHint('正文\n\n', '提示'),
+    '正文\n\n提示',
+  )
+  check(
+    'withHint 不破坏正文中间的空行',
+    withHint('第一段\n\n第二段', '提示'),
+    '第一段\n\n第二段\n\n提示',
+  )
 }
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

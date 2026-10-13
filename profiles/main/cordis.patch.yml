@@ -134,17 +134,21 @@
       name: './plugins/tcb/index.ts'
       config:
         path: !!js "process.env.DSH_HOME + '/data/tcb.json'"
-    # 当前注意力指针（抢占式嵌套的栈）。**领域无关**。
+    # 当前注意力焦点：**白羽现在在哪个会话上**。**领域无关**。
+    #
+    # 它**曾经**是"抢占式嵌套的栈"，那个模型已被"注意力转移"取代
+    # （docs/m5-preemption.md §20）：只有一个主 agent、一个会话，所以焦点是一个值。
+    #
+    # ★ 为什么还留着：写待办的**快照 subagent 也是在册 agent**，于是
+    # `agents.list()` 不再是单义的 —— "哪个才是白羽"必须有人明确回答。
     #
     # 放 `data/` 的一个文件而**不进数据库**（用户定案）：数据库存会话记录/图片/
-    # 表情包等大批量内容；指针栈是小的、显式的、排障时要直接看的。
+    # 表情包等大批量内容；焦点是小的、显式的、排障时要直接看的。
     # 每次改动即时落盘（临时文件 + 改名）。
-    #
-    # 注意它**不认识 TCB** —— 帧上带 tcb 字段，但不解释它。
     - id: pointer
       name: './plugins/pointer/index.ts'
       config:
-        path: !!js "process.env.DSH_HOME + '/data/pointer-stack.json'"
+        path: !!js "process.env.DSH_HOME + '/data/focus.json'"
     # 感知设施：**领域无关**（不认识 QQ），provide('perception')。
     # 领域 register() 一个信号源（pull + templates），感知层按闲时定时器拉、
     # 统一渲染【不含内容】的简报、落库、发 `perception/notice` 事件。
@@ -215,8 +219,17 @@
     - id: attention
       name: './plugins/attention/index.ts'
       config:
-        trigger: mention
-        groups: []
+        # 两个注意力阈值（docs/m5-preemption.md §20.5）。不写就用插件里的默认值：
+        #   pendingThreshold (n)：原任务优先级 > n 才记待办。默认 0
+        #     —— 0 级任务（群聊）被中断不记，> 0 的才记。
+        #   urgentThreshold (m)：打断信号优先级 >= m 走硬 cancel。默认 80。
+        # 想调就取消下面两行的注释。
+        # pendingThreshold: 0
+        # urgentThreshold: 80
+
+        # 说明：旧的 `trigger: mention` / `groups: []` 是 M3 之前的 attention
+        # （那时它直接订阅 `qq/message`）。重写后这两个字段已不存在，
+        # 写在这里会被 schema 忽略 —— 所以删掉了。
 
     # 常驻 agent：进程一起来就建白羽的会话，让 QQ 那边随时有人可推。
     # headless 启动不创建 agent，没有这一行 qq-attention 会一直报"无人可推"。

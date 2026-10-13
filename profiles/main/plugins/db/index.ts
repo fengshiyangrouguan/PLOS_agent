@@ -107,25 +107,34 @@ export class Db extends Service {
 
     const result = migrate(this.handle)
 
-    // ⚠️ 未解：这个插件拿到的 `this.ctx.logger` 不产出任何输出。
+    // 启动自述。
     //
-    // 已排除的原因（都实测过）：
-    //   × 不是 inject —— `static inject = ['logger']` 会让插件【永不激活】，
-    //     因为 logger 是 Context 的自有属性（vendor/cordis/src/context.ts:81），
-    //     不是注册的服务名，注入它等于永远等服务
-    //   × 不是"构造函数太早" —— 挪到 `Service.init`（本方法）里一样没有输出
-    //   × 不是"推迟不够" —— `setTimeout(0)` 也一样
-    //   × 不是级别过滤 —— 用 `logger.error`（level 0，永远显示）也一样没有
-    //   × 不是 init 没跑 —— 往表里写诊断行验证过，跑了
+    // ⚠️ **这一行在这里打，终端上看不见 —— 但这不是 bug，也不是"logger 取不到"。**
     //
-    // 对照：`qq-adapter`（同样是 Service 类）用 `this.ctx.logger` 是正常的，
-    // 但它的调用都发生在**激活之后的方法**里，没有一处在构造或 init 期。
+    // 完整因果（已闭合，见 PLOS/docs/logger-issue.md）：
     //
-    // 所以先用可选访问兜住：**诊断日志不该让设施失效**。
-    // 功能是完整的（库、表、迁移、库存取都验过），这只是少一行启动日志。
-    const logger = (this.ctx as { logger?: { info: (message: string) => void } }).logger
+    //   Service.init 执行 → ctx.logger.info(...)  ← 完全合法，记录真的产生了
+    //     ↓
+    //   cordis 内置 buffer 收到它
+    //     ↓
+    //   dsh-logbook 声明了 `inject = ['commands']`，所以它【还在等 commands 服务】
+    //     → 它的 stderr exporter 尚未注册
+    //     ↓
+    //   当时没有任何"终端出口" → 终端看不到
+    //     ↓
+    //   logbook 激活后只是把旧 buffer 铺进 `/logs` 的 ring，**不重放到 stderr**
+    //
+    // 对照：`qq-tools` / `qq-resident` 的日志在 **apply 之后**打，那时 logbook 已激活。
+    //
+    // **所以这里保持直接调用，不要用可选链**：
+    //   · `ctx.logger` 是 Context 的自有属性（vendor/cordis/src/context.ts:81），
+    //     不是可选服务；它不存在属于框架严重异常，该炸就炸
+    //   · 可选链会把真正的框架问题静默掉，还会让后来人误以为 logger 真的可能不存在
+    //
+    // 正确的修法在 logbook 侧（让 stderr exporter 不依赖 commands），
+    // 不该让每个业务设施自己加 `console.log` 绕。
     if (this.config.verbose) {
-      logger?.info(`db：${this.config.path} —— ${result.applied.length === 0
+      this.ctx.logger.info(`db：${this.config.path} —— ${result.applied.length === 0
         ? `已是最新（v${String(result.to)}）`
         : `v${String(result.from)} → v${String(result.to)}：${result.applied.join('、')}`}`)
     }

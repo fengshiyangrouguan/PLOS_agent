@@ -97,7 +97,11 @@ adapter/buffer.ts:69    conversationOf()  ← 全仓唯一写 group:/private: �
 
 见 `PLOS/docs/design.md` §十二 的实施顺序（M1–M6）。
 M1（数据库设施）、M2（感知）、M3（attention 重写）、M4（qq 领域改造）、
-M5 的一部分（抢占决策 + 指针栈）已完成。
+M5（注意力转移：`attention` 收缩 + `pointer` 退化成焦点 + `tcb` + **`interrupt_plan`**）已完成。
+
+**M5 的权威设计是 `PLOS/docs/m5-preemption.md` §20**（不是 §6–§19 —— 那几节是
+被取代的 RTOS 嵌套模型，保留作"已排除的选项"）。要动 `attention` /
+`interrupt_plan` / `pointer` 之前先读 §20。
 
 ---
 

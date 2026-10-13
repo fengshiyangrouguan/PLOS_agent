@@ -89,8 +89,9 @@ declare module '@deepseek-ai/cordis' {
 export class Attention extends Service {
   static Config: z<Config> = ConfigSchema
 
-  /** 依赖感知层（订阅事件）、agent 注册表（叫醒）、注意力焦点（找当前那个 agent）。 */
-  static inject = ['perception', 'agents', 'pointer']
+  /** 依赖感知层（订阅事件）、agent 注册表（叫醒）、注意力焦点（找当前那个 agent）、
+   * 中断待办（`> n` 的原任务被中断时记一条）。 */
+  static inject = ['perception', 'agents', 'pointer', 'interruptPlan']
 
   private readonly config: Config
   private readonly queue: PendingQueue
@@ -209,6 +210,27 @@ export class Attention extends Service {
 
     // 这一轮（或接下来这一轮）的注意力大小就是本条目的优先级。
     this.currentPriority = item.notice.highest
+
+    // ★ `> n` 的原任务被中断 —— 记一条待办（§20.4）。
+    //
+    // **必须在这里、同步地做**：`note` 内部要立刻 `snapshotEvents()` 取边界，
+    // 而再晚一点中断消息就进了 log，快照会变成"被打断【之后】"的状态（§20.4 的全部分量）。
+    // 已查实 `steer()` 自己一条 log 都不写、`kick` 是 async 所以推迟到微任务
+    // （`agent-loop/src/agent.ts:154-161, 214-234`），所以此刻取到的边界
+    // 与 `steer` 之前**完全相同**。
+    //
+    // 位置在投递**之后**：目标不在册时上面已经 return，那次中断根本没发生，
+    // 就不该留下一条待办。
+    if (plan.kind === 'steer' || plan.kind === 'cancel') {
+      if (plan.record) {
+        this.ctx.interruptPlan.note({
+          agent,
+          why: item.notice.text,
+          priority: item.notice.highest,
+        })
+      }
+    }
+
     return true
   }
 
@@ -243,10 +265,10 @@ export class Attention extends Service {
     const item = this.queue.drain()
     if (item === undefined) return
 
-    if (this.deliver(item, plan)) {
-      const record = plan.kind === 'deliver' ? false : plan.record
+    const delivery = this.deliver(item, plan)
+    if (delivery) {
       this.ctx.logger.info(
-        `attention: 已交付（${plan.kind}${record ? '，该记待办' : ''}，`
+        `attention: 已交付（${plan.kind}${plan.kind === 'deliver' ? '' : `，${plan.record ? '已记待办' : '不记待办'}`}，`
         + `highest=${String(item.notice.highest)}，原任务=${String(this.currentPriority)}，`
         + `剩 ${String(this.queue.size)} 条待交付）`,
       )

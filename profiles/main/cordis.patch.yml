@@ -247,6 +247,29 @@
         # （那时它直接订阅 `qq/message`）。重写后这两个字段已不存在，
         # 写在这里会被 schema 忽略 —— 所以删掉了。
 
+    # 中断待办：**注意力转移模型的恢复路径**（docs/m5-preemption.md §20.7）。
+    #
+    # 原任务优先级 > n（attention 判的）时，在【中断那一刻】同步取边界、起一个
+    # 快照 subagent 看住"她当时在干什么"；中断超过 T 还没回来，就让那个 subagent
+    # 把它写成一条待办、浮进她下一次唤醒的上下文，于是她想起来还有件事没做完。
+    #
+    # ★ 这就是"**用一条恢复路径，换掉整套上下文冻结机制**"里那条恢复路径 ——
+    # 也正因为有它，主路径才不需要 fork / 结清 / 保"保证她一定回来"。
+    #
+    # 四个可调项（§20.5）：T（timeoutMs）/ TTL（planTtlMs）/ planner TCB / 清扫周期。
+    # 不写就用插件里的默认值：T=2 分钟（§20.5 表里标的是【待定】，这是起点值）、
+    # TTL=1 天、planner='planner'。想调就取消对应行的注释。
+    #
+    # inject ['agents','db','tcb']：要 agent 注册表（建快照 subagent）、
+    # 数据库（写待办）、TCB（拿 planner 的模型配置）。所以它必须排在 db / tcb 之后。
+    - id: interrupt-plan
+      name: './plugins/interrupt_plan/index.ts'
+      config:
+        # timeoutMs: 120000
+        # planTtlMs: 86400000
+        # plannerTcb: planner
+        # sweepIntervalMs: 600000
+
     # 常驻 agent：进程一起来就建白羽的会话，让 QQ 那边随时有人可推。
     # headless 启动不创建 agent，没有这一行 qq-attention 会一直报"无人可推"。
     # greeting 从环境变量取（默认空 = 启动时不说话）。

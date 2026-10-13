@@ -50,8 +50,11 @@ export const name = 'qq-resident'
  *
  * 这是实测踩出来的：日志时间线显示 apply 跑在 `hmr watching` 之前。
  * 靠依赖声明约束顺序，比轮询等工厂出现可靠。
+ *
+ * `pointer` 也在依赖里：白羽一上线就要把注意力焦点钉在她身上
+ * （见 `apply` 里那段注释 —— 那是 `interrupt_plan` 的前置条件）。
  */
-export const inject = ['agents', 'agentLoop', 'agentDefaultModel', 'tcb']
+export const inject = ['agents', 'agentLoop', 'agentDefaultModel', 'tcb', 'pointer']
 
 /** 配置。 */
 export interface Config {
@@ -134,6 +137,21 @@ export function apply(ctx: Context, config: Config): void {
         return
       }
       handle = created
+
+      // ★ 写下注意力焦点 —— **这一步是 `interrupt_plan` 的前置条件**。
+      //
+      // `attention.targetAgent()` 的顺序是「配置的 sessionId → 焦点 → 恰好一个在册 agent」。
+      // 而**待办的快照 subagent 一建出来，`agents.list()` 就不止一个了** ——
+      // 焦点还空着的话，`attention` 会掉进那个"恰好一个"的兜底分支打警告，
+      // 然后**什么都不投**。所以白羽一上线就把焦点钉在她身上。
+      //
+      // 每次启动都写（即使存档里已经指着她）：一次多余的 IO 换"崩了也认得自己是谁"，
+      // 而且 `set` 是原子落盘（临时文件 + 改名）。
+      ctx.pointer.set({
+        sessionId: created.agent.id,
+        tcb: tcb?.id ?? ctx.tcb.defaultId,
+        updatedAt: Date.now(),
+      })
 
       // 补打各设施的启动自述（db / tcb / pointer）。
       // 它们跑在挂载早期，那一刻还没有终端出口；本行是补丁层的【最后一行】，

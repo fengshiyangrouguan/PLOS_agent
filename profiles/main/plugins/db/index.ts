@@ -45,7 +45,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { migrate } from './schema.ts'
-import { MessageStore, PerceptionStore, SessionPointer } from './stores.ts'
+import { MessageStore, PerceptionStore } from './stores.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -64,8 +64,6 @@ export class Db extends Service {
   readonly messages: MessageStore
   /** 感知历史。 */
   readonly perception: PerceptionStore
-  /** 当前会话指针（单行）。 */
-  readonly sessionPointer: SessionPointer
 
   /**
    * 原始句柄。给需要写自定义查询的领域用（比如将来的记忆 / 媒体表）。
@@ -94,7 +92,6 @@ export class Db extends Service {
 
     this.messages = new MessageStore(handle)
     this.perception = new PerceptionStore(handle)
-    this.sessionPointer = new SessionPointer(handle)
   }
 
   /**

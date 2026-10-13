@@ -88,20 +88,6 @@ export const MIGRATIONS: readonly Migration[] = [
       `)
       db.exec('CREATE INDEX IF NOT EXISTS idx_perception_time ON perception_history (time)')
 
-      // ── 当前会话指针（单行） ──────────────────────────────────────
-      // 设计 §8.4：DSH 没有"主要 agent"这个概念，每个 agent 绑一个 session，
-      // 而合并会**换 sessionId**（新会话）。所以"当前是哪个"必须我们自己记，
-      // 且**进程重启不丢** —— 这就是为什么要落库而不是放内存。
-      //
-      // `CHECK (id = 1)` 强制单行：这类指针表一旦出现两行就是 bug。
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS current_session (
-          id         INTEGER PRIMARY KEY CHECK (id = 1),
-          session_id TEXT    NOT NULL,
-          updated_at INTEGER NOT NULL
-        )
-      `)
-
       // ── events（照搬 Shiraha_OS） ─────────────────────────────────
       // 用户定案：**完全照搬** `Shiraha_OS/src/infrastructure/database/database_model.py:71`
       // 的 `EventDB`，**但两条外键降级为普通索引字段**。

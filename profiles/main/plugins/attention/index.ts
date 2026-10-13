@@ -74,8 +74,8 @@ declare module '@deepseek-ai/cordis' {
 export class Attention extends Service {
   static Config: z<Config> = ConfigSchema
 
-  /** 依赖感知层（要订阅它的事件）、agent 注册表（要唤醒）、数据库（读会话指针）。 */
-  static inject = ['perception', 'agents', 'db']
+  /** 依赖感知层（订阅事件）、agent 注册表（唤醒）、指针栈（找当前会话）。 */
+  static inject = ['perception', 'agents', 'pointer']
 
   private readonly config: Config
   private readonly queue: PendingQueue
@@ -108,7 +108,7 @@ export class Attention extends Service {
     const all = this.ctx.agents.list()
     const wanted = this.config.sessionId !== ''
       ? this.config.sessionId
-      : this.ctx.db.sessionPointer.get()
+      : this.ctx.pointer.current?.sessionId
 
     if (wanted !== undefined && wanted !== '') {
       const found = all.find(agent => agent.id === wanted)

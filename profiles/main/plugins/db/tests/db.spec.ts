@@ -24,9 +24,7 @@
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { LATEST_VERSION, currentVersion, migrate } from '../schema.ts'
-import {
-  DEFAULT_CONTEXT, MessageStore, PerceptionStore, SessionPointer,
-} from '../stores.ts'
+import { DEFAULT_CONTEXT, MessageStore, PerceptionStore } from '../stores.ts'
 
 let passed = 0
 let failed = 0
@@ -128,7 +126,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   const names = (db.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
   ).all() as { name: string }[]).map(row => row.name)
-  check('四张表都在', names, ['current_session', 'events', 'messages', 'perception_history'])
+  check('三张表都在', names, ['events', 'messages', 'perception_history'])
 
   // events 照搬 Shiraha：两条外键降级为普通列（不能有 FOREIGN KEY 约束）。
   const ddl = (db.prepare(
@@ -226,29 +224,6 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   store.markPulled([recent[0]!.id])
   check('标记后已拉取', store.recent()[0]?.pulled, true)
   check('未标记的仍是未拉取', store.recent()[1]?.pulled, false)
-  db.close()
-}
-
-// ── 当前会话指针 ────────────────────────────────────────────────────
-{
-  const db = freshDb()
-  const pointer = new SessionPointer(db)
-  check('初始为空', pointer.get(), undefined)
-
-  pointer.set('session-1', 500)
-  check('写入后可读', pointer.get(), 'session-1')
-
-  pointer.set('session-2', 600)
-  check('覆盖而非新增', pointer.get(), 'session-2')
-
-  // 单行约束：手写第二行必须被 CHECK 挡住
-  checkThrows('单行约束挡住了第二行', () => {
-    db.prepare('INSERT INTO current_session (id, session_id, updated_at) VALUES (2, ?, ?)')
-      .run('session-x', 700)
-  }, /CHECK|constraint/i)
-
-  pointer.clear()
-  check('清空后为空', pointer.get(), undefined)
   db.close()
 }
 

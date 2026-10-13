@@ -51,6 +51,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { PendingQueue, type PendingItem } from './queue.ts'
+import { planPreemption, withWrapupHint } from './preempt.ts'
 import type { PerceptionNotice } from '../perception/types.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -129,27 +130,30 @@ export class Attention extends Service {
   }
 
   /**
-   * 决定要不要交付，要则唤醒 agent。
+   * 交付一条：按抢占计划决定要不要带收尾提示。
    *
    * @param item - 队首待交付项。
+   * @param withHint - 是否在正文末尾拼上收尾提示。
    * @returns 真的交付了返回 `true`。
    */
-  private deliver(item: PendingItem): boolean {
+  private deliver(item: PendingItem, withHint: boolean): boolean {
     const agent = this.targetAgent()
     if (agent === undefined) return false
 
+    const text = withHint ? withWrapupHint(item.notice.text) : item.notice.text
     agent.followup(createUserMessage({
-      content: [{ type: 'text', text: item.notice.text }],
+      content: [{ type: 'text', text }],
       source: { kind: 'perception', domain: item.notice.signals[0]?.domain ?? 'perception' },
     }))
     return true
   }
 
   /**
-   * 收一条感知条目：入队，然后尝试交付队首。
+   * 收一条感知条目：入队，然后按忙闲与优先级决定怎么处理。
    *
    * **不区分"谁发起的拉取"** —— 那个信息可由 `highest` 推出（见模块注释）。
-   * 0 级条目照常交付：它只可能来自定时器，而那次"四处看看"本来就是要叫她的。
+   * 但**要区分她忙不忙**：忙的时候 0 级不抢占（`planPreemption` 返回 `queue`），
+   * 因为抢占也是一种唤醒，而 0 级的语义就是不产生自己的唤醒。
    *
    * @param notice - 感知条目。
    */
@@ -157,13 +161,28 @@ export class Attention extends Service {
     if (notice.signals.length === 0) return
     this.queue.push(notice)
 
+    const peeked = this.queue.peek()
+    if (peeked === undefined) return
+
+    const agent = this.targetAgent()
+    // 找不到目标时不动队列 —— 留着，等有 agent 了再投。
+    if (agent === undefined) return
+
+    const plan = planPreemption(agent.status, peeked.notice.highest)
+    if (plan.kind === 'queue') return
+
     const item = this.queue.drain()
     if (item === undefined) return
-    if (this.deliver(item)) {
+
+    const withHint = plan.kind === 'wrapup-then-preempt'
+    if (this.deliver(item, withHint)) {
       this.ctx.logger.info(
-        `attention: 已交付（highest=${String(item.notice.highest)}，`
-        + `剩 ${String(this.queue.size)} 条待交付）`,
+        `attention: 已交付（${plan.kind}，highest=${String(item.notice.highest)}，`
+        + `收尾提示=${withHint ? '有' : '无'}，剩 ${String(this.queue.size)} 条待交付）`,
       )
+    } else {
+      // 目标中途消失 —— 把条目放回去，别丢。
+      this.queue.push(item.notice, item.queuedAt)
     }
   }
 

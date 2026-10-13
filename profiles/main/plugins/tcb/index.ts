@@ -139,7 +139,33 @@ export class TcbRegistry extends Service {
       return { ...result, sections: result.sections.filter(section => allowed.has(section.name)) }
     })
 
-    // ② 人设：注册成 `deployment:persona-prefix` —— 同名才会替换而不是重复。
+    // ② 采样参数（temperature / maxTokens / stop）：走 `agent/request` 瀑布。
+    //
+    // ★ **为什么不走 `agentOptions`**：`AgentOptions`
+    //   （`core/agent/src/runtime-types.ts:26-35`）只有
+    //   provider / model / reasoningEffort / **maxTokens** ——
+    //   **没有 `temperature`，也没有 `stop`**。那条路最多修好三分之一。
+    //
+    //   而 `agent/request` 是一个**返回 `LlmCallConfig` 的瀑布**（同文件 `:337`），
+    //   这三个字段 `LlmCallConfig` 里都有（`catalog.ts` 的 `ModelConfig` 就是照它抄的）。
+    //   于是**一个监听器让三个一起生效**。
+    //
+    //   作用域是 `agentCtx`，所以只影响这个 agent —— 白羽和 planner 各是各的。
+    //
+    //   在接上它之前，`data/tcb.json` 里的 `temperature` 是**空设置**：
+    //   解析了、存下了、**没有任何消费方**。
+    const sampling = {
+      ...tcb.model.temperature === undefined ? {} : { temperature: tcb.model.temperature },
+      ...tcb.model.maxTokens === undefined ? {} : { maxTokens: tcb.model.maxTokens },
+      // `ModelConfig.stop` 是 `readonly string[]`，而 `LlmCallConfig.stop` 是 `string[]`
+      // —— 在这一步复制，别把只读视图漏进可变的请求配置。
+      ...tcb.model.stop === undefined ? {} : { stop: [...tcb.model.stop] },
+    }
+    if (Object.keys(sampling).length > 0) {
+      agentCtx.on('agent/request', async (_payload, next) => ({ ...await next(), ...sampling }))
+    }
+
+    // ③ 人设：注册成 `deployment:persona-prefix` —— 同名才会替换而不是重复。
     if (tcb.identity !== undefined && tcb.identity !== '') {
       let text: string
       try {

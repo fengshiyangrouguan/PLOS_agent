@@ -12,6 +12,8 @@
 
 import z from '@deepseek-ai/schemastery'
 
+import type { ShutdownRecord } from './render.ts'
+
 /** `ctx.interruptPlan` 的配置。 */
 export interface Config {
   /**
@@ -43,6 +45,16 @@ export interface Config {
    * —— 排障时直接看表不会被一堆死行干扰。
    */
   sweepIntervalMs: number
+  /**
+   * **优雅关闭记录**的存档路径。
+   *
+   * 跟 `pointer` / `tcb` 同一层、同一个判据（"**要不要给人改**"）：放 `data/`
+   * 的一个文件，不进数据库 —— 它小、显式、排障时要直接看。
+   *
+   * 内容是"上次进程停止时她停在哪个坐标"（{@link ShutdownRecord}）：
+   * **临死前写、启动时注入一次、然后删掉**。
+   */
+  statePath: string
 }
 
 /** 配置 schema。 */
@@ -51,4 +63,5 @@ export const Config: z<Config> = z.object({
   planTtlMs: z.natural().min(1).default(24 * 60 * 60 * 1000),
   plannerTcb: z.string().min(1).default('planner'),
   sweepIntervalMs: z.natural().min(1000).default(10 * 60 * 1000),
+  statePath: z.string(),
 })

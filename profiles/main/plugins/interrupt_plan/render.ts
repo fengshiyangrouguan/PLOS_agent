@@ -34,37 +34,49 @@
  * @module interrupt_plan/render
  */
 
-/** 写待办那两行的行首标记。**模型可见，不要改。** */
-export const WHAT_LABEL = '在做什么：'
-/** 见 {@link WHAT_LABEL}。 */
-export const WHY_LABEL = '为什么停下：'
+/**
+ * 写待办那一行的行首标记。
+ *
+ * ⚠️ **它只是行首前缀，不含冒号** —— 冒号是**标点**，不是协议。
+ * 早先写成 `'在做什么：'`（全角冒号）并 `startsWith` 匹配，模型把全角写成半角
+ * `:` 就整行落空、静默退回占位说明。**别把标点当协议。**
+ */
+export const WHAT_LABEL = '在做什么'
+
+/** 解析不到时的占位说明。**宁可如实说"没写清楚"，也不给一条残句。** */
+export const WHAT_PLACEHOLDER = '（没有写清楚。她的上下文里可以看那段会话。）'
 
 /**
  * 写待办的指令。
  *
- * **措辞的四件事**：
+ * ## ★ 只要一行 —— `why` 不由它产
+ *
+ * 待办要两样东西：**她刚在干什么**（`what`）与**被什么打断的**（`why`）。
+ * 后者**服务端本来就知道**（就是那条感知条目的正文），所以**不绕模型一圈**。
+ *
+ * 早先的版本让模型「原样抄用」`why` 再解析回来 —— 那一圈**只能损失不能增益**
+ * （抄错一个字、或把冒号换成半角，就静默降级），而它抄的正是我们手里那份原文。
+ * 现在 `why` 由 `index.ts` 直接用中断那一刻的原话。
+ *
+ * ## 措辞的三件事
  *
  * 1. 「你已经看到…**之前**的那个上下文」—— 把她手上这份历史的**位置**说清楚。
  *    不说，她可能以为自己看到的是"刚刚发生的事"，那就会去读下面没有的东西。
- * 2. **明说看不到中断内容** —— 否则她会去上下文里找"到底什么事打断了"，
- *    找不到就编一个。**这是 `WRITER_TASK` 里最要紧的一句。**
- * 3. **只要两行 / 每条一句** —— 最长的是"1 天"（`planTtlMs`），写得长等于把上下文又搬了一遍，
- *    而 §20.10 明确"**但不进上下文**"说的是**细节**不进，不是"什么都别写"。
- * 4. **明说"不用道歉/不用回应"** —— 它是工具调用，不是一次对话；给它的任务里
- *    没有"回答用户"这一项，说清楚能省掉一整段寒暄。
+ * 2. **明说看不到中断内容** —— 否则她会去上下文里找"到底什么事打断了"，找不到就编。
+ * 3. **明说"不用道歉/不用回应"** —— 它是工具调用，不是一次对话。
  */
 export const WRITER_TASK = [
-  '你是一个记录工具，不是对话者。不要道歉、不要提问、不要输出这两行以外的任何内容。',
+  '你是一个记录工具，不是对话者。不要道歉、不要提问、不要输出这一行以外的任何内容。',
   '',
   '你看到的是【白羽在被打断之前】的那个上下文。从现在起它不再增长：',
   '上面最后发生的事，就是她被打断时正在做的事。',
-  '中断她的那条信号【不在你的上下文里】，所以你无从知道具体是什么事打断了，',
-  '也不要去猜或编造 —— 那是下面 `为什么停下：` 那一行给你的，**原样抄进去**。',
+  '中断她的那条信号【不在你的上下文里】，所以你也无从知道那是什么事',
+  '—— 那一项不由你负责，不要猜、不要编、不要写。',
   '',
-  '请只在上下文中找证据（最后几条消息、最后一次工具调用、最后一句她的话），然后输出**恰好两行**：',
+  '请只在上下文中找证据（最后几条消息、最后一次工具调用、最后一句她的话），',
+  '然后输出**恰好一行**：',
   '',
   '在做什么：<一句话。她正进行到哪一步。用她自己的动作描述，不要复述原文>',
-  '为什么停下：<一句话。原样抄用给你的那句话，不要改写、不要补充>',
 ].join('\n')
 
 /**
@@ -83,66 +95,60 @@ export interface PlanCoordinates {
 }
 
 /**
- * 拼写待办指令，把中断的信息接上去。
+ * 拼写待办指令，把中断那一刻的坐标接上去。
+ *
+ * **只给坐标，不给 `why`** —— `why` 由服务端直接用原话（见 {@link WRITER_TASK}）。
  *
  * @param coordinates - 中断那一刻的坐标。
- * @param why - **中断的原因**（感知层渲染好的简报正文）。中断内容不在 subagent
- *   的上下文里，所以这一句是它唯一的依据。
  * @returns 给快照 subagent 的完整指令。
  */
-export function writerTaskFor(coordinates: PlanCoordinates, why: string): string {
+export function writerTaskFor(coordinates: PlanCoordinates): string {
   return [
     WRITER_TASK,
     '',
-    '── 下面是给你的、你上下文里没有的信息 ──',
-    `回看坐标：会话 ${coordinates.sessionId} 的第 ${String(coordinates.turn)} 轮`
+    '── 参考：她停在这里 ──',
+    `会话 ${coordinates.sessionId} 的第 ${String(coordinates.turn)} 轮`
     + `（最后一个事件 seq=${String(coordinates.seq)}）`,
-    '为什么停下（原样抄进第二行）：',
-    why.trim(),
   ].join('\n')
 }
 
-/** 写待办的 subagent 交回来的两句话。 */
-export interface PlanDraft {
-  /** 刚刚在干什么。 */
-  readonly what: string
-  /** 因为什么中断了。 */
-  readonly why: string
-}
-
 /**
- * 解析 subagent 的输出。
+ * 解析 subagent 的输出，取出"在做什么"。
  *
  * **按行首标记找，不按行号找** —— 模型可能加一句前言或多一个空行。
  * 标记行之外的**全部忽略**：这条路径上"多出来的内容"没有价值，
  * 而把它塞进待办等于把上下文又搬一遍。
  *
- * 某一行的标记在、内容空，或者整行没出现时，返回**明确的占位说明**而不是空串 ——
- * 空串会让 `renderPlan` 渲染出一条"在做什么：\n为什么停下：…"的残句，
- * 看起来像渲染 bug。**宁可如实说"没写清楚"**，那至少是真话。
+ * ⚠️ **冒号两种宽度都接受**（见 {@link WHAT_LABEL}）：全角、半角、或者干脆没写
+ * 冒号，都算命中。标点不是协议。
+ *
+ * 标记在但内容空，或整行没出现时，返回 {@link WHAT_PLACEHOLDER} 而不是空串 ——
+ * 空串会渲染出一条「你之前正在：」的残句，看起来像渲染 bug。
  *
  * @param text - subagent 最后一条 assistant 消息的纯文本。
- * @returns 两句话；解析不到时给出占位说明。
+ * @returns 一句话；解析不到时是占位说明。
  */
-export function parseDraft(text: string): PlanDraft {
-  const line = (label: string): string | undefined => {
-    for (const raw of text.split(/\r?\n/)) {
-      const trimmed = raw.trim()
-      if (!trimmed.startsWith(label)) continue
-      const body = trimmed.slice(label.length).trim()
-      return body === '' ? undefined : body
-    }
-    return undefined
+export function parseWhat(text: string): string {
+  for (const raw of text.split(/\r?\n/)) {
+    const trimmed = raw.trim()
+    if (!trimmed.startsWith(WHAT_LABEL)) continue
+    const body = trimmed.slice(WHAT_LABEL.length).replace(/^[：:]\s*/, '').trim()
+    if (body !== '') return body
   }
-
-  return {
-    what: line(WHAT_LABEL) ?? '（没有写清楚。她的上下文里可以看那段会话。）',
-    why: line(WHY_LABEL) ?? '（没有写清楚。）',
-  }
+  return WHAT_PLACEHOLDER
 }
 
-/** 渲染待办要的全部输入。坐标单独给，渲染本身不认识数据库。 */
-export interface PlanRenderInput extends PlanCoordinates, PlanDraft {
+/**
+ * 渲染待办要的全部输入。坐标单独给，渲染本身不认识数据库。
+ *
+ * `what` 来自快照 subagent，`why` 来自**中断那一刻的原话**（服务端手里那份，
+ * 不绕模型 —— 见 {@link WRITER_TASK}）。
+ */
+export interface PlanRenderInput extends PlanCoordinates {
+  /** 被打断时正在做什么（来自快照 subagent）。 */
+  readonly what: string
+  /** 因为什么被打断（**服务端原话**，就是那条感知条目的正文）。 */
+  readonly why: string
   /** 中断发生时刻（毫秒）。 */
   readonly createdAt: number
   /** 落定时刻（毫秒）。 */
@@ -201,6 +207,57 @@ export function renderPlan(plan: PlanRenderInput, now: number): string | undefin
     `想接着做的话，从会话 ${plan.sessionId} 第 ${String(plan.turn)} 轮那里看起`
     + `（seq=${String(plan.seq)}，可以用 session_event_read 取回那一轮的上下文）。`,
     `（这条记于 ${new Date(plan.createdAt).toISOString()}，${remaining(plan.expiresAt, now)}。）`,
+    '',
+    '要不要接着做由你决定；如果你已经不打算管它了，忽略这条就行。',
+  ].join('\n')
+}
+
+/**
+ * 优雅关闭记录：**上次进程停止时，她正停在哪里**。
+ *
+ * 它跟待办是同一件事的两个来源（都算"被打断了"），但**不是同一批数据**：
+ * 待办由快照 subagent 写、有 `what`；**关闭记录来不及叫模型**（关不干净），
+ * 所以只有坐标。
+ */
+export interface ShutdownRecord {
+  /** 进程停止时注意力焦点所在的会话。 */
+  readonly sessionId: string
+  /** 停在哪一轮。 */
+  readonly turn: number
+  /** 停在哪条事件。 */
+  readonly seq: number
+  /** 停止时刻（毫秒）。 */
+  readonly at: number
+  /** **为什么停止** —— 进程能观测到的那一部分。 */
+  readonly reason: string
+}
+
+/**
+ * 渲染"上次是停下来的"。
+ *
+ * ## 为什么要有它（优雅关闭原理）
+ *
+ * 重启之后 `currentPriority` 回落到 `0`、turn 也断了 —— **她不知道上一轮是被停掉的**，
+ * 看起来就像"什么都没发生过"。而 **DSH 在 SIGINT/SIGTERM 上会优雅关闭**
+ * （`apps/cli/src/profile-boot.ts:280` 装了处理器 → `interrupt(code)`），
+ * 插件的 disposer 会跑，所以"**临死前记一笔、启动时注入**"是可行的。
+ *
+ * ⚠️ **它只记坐标，不记内容** —— 临死前叫不动模型。要细节她自己用
+ * `session_event_read` 回看，跟待办同一条纪律（§20.10）。
+ *
+ * ## 语气同 `renderPlan`：许可式
+ *
+ * 机制上没有任何东西强制她回来，所以这里是邀请不是命令。
+ *
+ * @param record - 关闭记录。
+ * @returns 注入正文。
+ */
+export function renderShutdown(record: ShutdownRecord): string {
+  return [
+    '【上次是停下来的】',
+    `上一次运行时进程停止了（${record.reason}）。`,
+    `你当时停在会话 ${record.sessionId} 第 ${String(record.turn)} 轮`
+    + `（seq=${String(record.seq)}，可以用 session_event_read 取回那一段）。`,
     '',
     '要不要接着做由你决定；如果你已经不打算管它了，忽略这条就行。',
   ].join('\n')

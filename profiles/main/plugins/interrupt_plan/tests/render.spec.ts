@@ -12,14 +12,16 @@
  * ## 这里重点验什么
  *
  * 这两个字符串是**模型可见的**，靠真实流量盯不住（模型输出每次都不同），
- * 所以只能靠这份自检钉死。四件事：
+ * 所以只能靠这份自检钉死。五件事：
  *
  * 1. **写待办的指令必须明说"中断内容不在你的上下文里"** —— 不说她就会去上下文里
  *    找"什么事打断了我"，找不到就编一个。这是整个机制最脆的一环（防回归）。
- * 2. **`为什么停下` 由指令原样提供，不是让她观察** —— 所以解析要**原样抄**，
- *    不能改写、不能补充。
+ * 2. **`why` 不由模型产** —— 服务端手里就有原文（那条感知条目），绕模型一圈
+ *    **只能损失不能增益**。所以指令里**不许**再出现"原样抄用"那种要求。
  * 3. **解析按行首标记找**，不按行号 —— 模型多一句前言不该让整条待办变成占位说明。
- * 4. **过期就不注入**，且**注入正文里必须三个坐标齐全**（`sessionId` / turn / seq）——
+ * 4. **★ 冒号两种宽度都认** —— 早先 `WHAT_LABEL` 带全角冒号并 `startsWith` 匹配，
+ *    模型写成半角 `:` 就整行落空、**静默退回占位说明**。标点不是协议。
+ * 5. **过期就不注入**，且**注入正文里必须三个坐标齐全**（`sessionId` / turn / seq）——
  *    §20.10 定案"只给坐标不给内容"，坐标缺一个她就找不回去。
  *
  * @module interrupt_plan/render.spec
@@ -27,7 +29,7 @@
 
 import assert from 'node:assert/strict'
 import {
-  WHAT_LABEL, WHY_LABEL, WRITER_TASK, parseDraft, renderPlan, writerTaskFor,
+  WHAT_LABEL, WHAT_PLACEHOLDER, WRITER_TASK, parseWhat, renderPlan, renderShutdown, writerTaskFor,
 } from '../render.ts'
 
 let passed = 0
@@ -64,92 +66,75 @@ function checkTrue(label: string, actual: boolean): void {
     WRITER_TASK.includes('中断她的那条信号【不在你的上下文里】'),
   )
   checkTrue(
-    '★ 指令明说不要去猜或编造',
-    WRITER_TASK.includes('也不要去猜或编造'),
+    '★ 指令明说不要去猜、不要去编',
+    WRITER_TASK.includes('不要猜、不要编'),
+  )
+  checkTrue(
+    '★ 指令明说那一项不由它负责',
+    WRITER_TASK.includes('不由你负责'),
   )
   checkTrue(
     '★ 指令把上下文的时间位置说清楚（"之前"的那个上下文）',
     WRITER_TASK.includes('【白羽在被打断之前】'),
   )
   checkTrue(
-    '★ 指令要求恰好两行（待办要短 —— 细节靠坐标回看，不靠待办搬运）',
-    WRITER_TASK.includes('输出**恰好两行**'),
+    '★ 指令要求恰好一行（待办要短 —— 细节靠坐标回看，不靠待办搬运）',
+    WRITER_TASK.includes('输出**恰好一行**'),
   )
   checkTrue(
     '★ 指令明说它是工具不是对话者（省掉一整段寒暄）',
     WRITER_TASK.includes('你是一个记录工具，不是对话者'),
   )
   checkTrue(
-    '★ 指令里出现两个行首标记（解析器认的就是它们）',
-    WRITER_TASK.includes(WHAT_LABEL) && WRITER_TASK.includes(WHY_LABEL),
+    '★ 指令里出现行首标记（解析器认的就是它）',
+    WRITER_TASK.includes(WHAT_LABEL),
+  )
+  checkTrue(
+    '★ 指令里【不再】要求抄写 why —— why 由服务端直接用原文',
+    !WRITER_TASK.includes('原样抄') && !WRITER_TASK.includes('为什么停下'),
   )
 }
 
-// ── writerTaskFor 把坐标与原因接上去 ────────────────────────────────
+// ── writerTaskFor 把坐标接上去（**不接 why**） ──────────────────────
 {
-  const task = writerTaskFor({ sessionId: 'plos-baiyu', turn: 7, seq: 42 }, '  【QQ】有人 @ 了你  ')
+  const task = writerTaskFor({ sessionId: 'plos-baiyu', turn: 7, seq: 42 })
   checkTrue('task 保留指令原文', task.includes(WRITER_TASK))
   checkTrue('task 给出会话 id', task.includes('plos-baiyu'))
   checkTrue('task 给出轮号', task.includes('第 7 轮'))
   checkTrue('task 给出 seq（给工具的坐标）', task.includes('seq=42'))
-  checkTrue('task 里 why 已 trim（不把首尾空白带进待办）', task.includes('【QQ】有人 @ 了你\n') || task.endsWith('【QQ】有人 @ 了你'))
+  checkTrue('★ task 里没有 why —— 它不该绕模型一圈', !task.includes('@ 了你'))
 }
 
-// ── parseDraft：正常两行 ────────────────────────────────────────────
+// ── parseWhat：正常 ────────────────────────────────────────────────
 {
-  check(
-    '正常两行',
-    parseDraft('在做什么：正在给 attention 加待办\n为什么停下：群里有人 @ 了她'),
-    { what: '正在给 attention 加待办', why: '群里有人 @ 了她' },
-  )
+  check('正常一行', parseWhat('在做什么：正在给 attention 加待办'), '正在给 attention 加待办')
   check(
     '★ 多一句前言不影响解析（按标记找，不按行号）',
-    parseDraft('好的，我看看。\n\n在做什么：A\n为什么停下：B\n\n希望有帮助！'),
-    { what: 'A', why: 'B' },
+    parseWhat('好的，我看看。\n\n在做什么：A\n\n希望有帮助！'),
+    'A',
   )
-  check(
-    '★ 两行顺序反了也能解析（模型不保证顺序）',
-    parseDraft('为什么停下：B\n在做什么：A'),
-    { what: 'A', why: 'B' },
-  )
-  check(
-    '行首有缩进也认（模型爱缩进）',
-    parseDraft('  在做什么：A\n    为什么停下：B'),
-    { what: 'A', why: 'B' },
-  )
-  check(
-    '标记行取第一次出现的那条',
-    parseDraft('在做什么：第一次\n在做什么：第二次\n为什么停下：B'),
-    { what: '第一次', why: 'B' },
-  )
+  check('行首有缩进也认（模型爱缩进）', parseWhat('  在做什么：A'), 'A')
+  check('标记行取第一次出现的那条', parseWhat('在做什么：第一次\n在做什么：第二次'), '第一次')
+  check('★ 半角冒号也认（标点不是协议）', parseWhat('在做什么: A'), 'A')
+  check('★ 半角冒号 + 无空格也认', parseWhat('在做什么:B'), 'B')
+  check('★ 干脆不写冒号也认', parseWhat('在做什么 A'), 'A')
 }
 
-// ── parseDraft：解析不到时给【占位说明】，不是空串 ───────────────────
+// ── parseWhat：解析不到时给【占位说明】，不是空串 ───────────────────
 {
   check(
     '★ 什么都没写 → 占位说明（宁可如实说没写清楚，也不要渲染出残句）',
-    parseDraft('我不知道该说什么'),
-    { what: '（没有写清楚。她的上下文里可以看那段会话。）', why: '（没有写清楚。）' },
+    parseWhat('我不知道该说什么'),
+    WHAT_PLACEHOLDER,
   )
-  check(
-    '★ 标记在但内容为空 → 也算没写清楚',
-    parseDraft('在做什么：\n为什么停下：'),
-    { what: '（没有写清楚。她的上下文里可以看那段会话。）', why: '（没有写清楚。）' },
-  )
-  check(
-    '只有一行时另一行是占位说明',
-    parseDraft('在做什么：A'),
-    { what: 'A', why: '（没有写清楚。）' },
-  )
+  check('★ 标记在但内容为空 → 也算没写清楚', parseWhat('在做什么：'), WHAT_PLACEHOLDER)
+  check('★ 标记在但只有冒号', parseWhat('在做什么:  '), WHAT_PLACEHOLDER)
   check(
     '★ 标记出现在句子中间不算（必须行首）',
-    parseDraft('我写了 在做什么：A 这句'),
-    { what: '（没有写清楚。她的上下文里可以看那段会话。）', why: '（没有写清楚。）' },
+    parseWhat('我写了 在做什么：A 这句'),
+    WHAT_PLACEHOLDER,
   )
-  check('空输入不抛错', parseDraft(''), {
-    what: '（没有写清楚。她的上下文里可以看那段会话。）',
-    why: '（没有写清楚。）',
-  })
+  check('空输入不抛错', parseWhat(''), WHAT_PLACEHOLDER)
 }
 
 // ── renderPlan：★ 过期就不注入 ─────────────────────────────────────
@@ -218,6 +203,29 @@ function checkTrue(label: string, actual: boolean): void {
   checkTrue('不满 1 分钟也显示 1 分钟（不写 0）', at(1).includes('还能记 1 分钟'))
   checkTrue('还差 5 小时', at(5 * 3_600_000).includes('还能记 5 小时'))
   checkTrue('23 小时 59 分按小时算', at(24 * 3_600_000 - 60_000).includes('还能记 23 小时'))
+}
+
+// ── renderShutdown：优雅关闭记录（重启后她得知道上一轮是【被停掉】的） ──
+{
+  const text = renderShutdown({
+    sessionId: 'plos-baiyu',
+    turn: 7,
+    seq: 42,
+    at: 1_000_000_000_000,
+    reason: '当时有一条中断还没处理完',
+  })
+  checkTrue('★ 含"上次是停下来的"', text.includes('【上次是停下来的】'))
+  checkTrue('★ 含停止的原因', text.includes('当时有一条中断还没处理完'))
+  checkTrue('★ 含 sessionId 坐标', text.includes('plos-baiyu'))
+  checkTrue('★ 含 turn 坐标', text.includes('第 7 轮'))
+  checkTrue('★ 含 seq 坐标（给 session_event_read 的钥匙）', text.includes('seq=42'))
+  checkTrue('★ 告诉她用哪个工具回看', text.includes('session_event_read'))
+  checkTrue('★ 语气是许可式，不是命令式', text.includes('由你决定'))
+  checkTrue('★ 明说可以不管它', text.includes('忽略这条就行'))
+  checkTrue(
+    '★ 不含未替换的占位符',
+    !text.includes('${') && !text.includes('undefined') && !text.includes('NaN'),
+  )
 }
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

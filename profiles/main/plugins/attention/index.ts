@@ -97,13 +97,30 @@ export class Attention extends Service {
   private readonly queue: PendingQueue
 
   /**
-   * **激活当前 turn 的那个信号的优先级** —— 也就是"她手上这件事的注意力大小"。
+   * **她手上这件事的注意力大小** —— 也就是 `n` 那条线（要不要记待办）的基准。
    *
-   * `decisions §14` A1：**turn 继承激活它的信号的优先级**。它是 `n` 那条线的判据
-   * （原任务 `> n` 才记待办）。
+   * ## ⚠️ 它**不**是 `decisions §14` A1 的"turn 继承激活它的信号的优先级"
    *
-   * ⚠️ **只在内存里**：重启后回落到 `0`。后果是"重启后的第一次中断可能少记一条待办"
-   * —— 只会漏记，不会丢事，所以不值得为它加持久化。
+   * A1 是**旧（fork）模型**的规矩：那时中断会**开一个新的 turn / 一个新层**，
+   * 所以"这一轮的优先级"有定义。**无 fork 之后 `steer` 根本不开始新 turn**，
+   * 它插进正在跑的那一轮 —— 所以"这一轮"的定义没变，变的只是她同时在处理两件事。
+   *
+   * 于是这里的取值规则是：**只有真正开了新 turn 才更新**（`deliver` / `cancel`），
+   * **`steer` 不更新**。理由是语义的：`n` 问的是「**被打断的那件事**是不是
+   * 低注意力的事」，而 `steer` 进来的中断**没有改变那件事是什么**，只是叠在上面。
+   *
+   * 曾经写成"每次交付都更新"，那是错的 —— 而它恰好在代码自己的提示词制造的
+   * 情形里必定错：`WRAPUP_HINT` 明说「**你可以选择不管他**」。她一旦不管、继续干
+   * 原来的事，基准却已经变成中断的优先级了。后果是 §20.3 情形① 会复活：
+   * 一个 **0 级**原任务吸收过一次 80 级中断并拒绝了它，之后 `n = 20` 时来一条
+   * 20 级信号就会记待办 —— 而情形① 说这种**不该记**。
+   *
+   * （仍然只是估算：她"实际上手了没有"这个判据眼下不存在，见
+   * `interrupt_plan` 的 §21.2 ①。但"基准停在原任务上"至少不会主动跑偏。）
+   *
+   * ⚠️ **只在内存里**：重启后回落到 `0`。DSH 在 SIGINT/SIGTERM 上会优雅关闭
+   * （`apps/cli/src/profile-boot.ts:280`），所以那次 turn 确实结束了 ——
+   * 回落是对的，代价只是"重启后的第一次中断可能少记一条待办"（只漏不丢）。
    */
   private currentPriority = 0
 
@@ -202,14 +219,16 @@ export class Attention extends Service {
         reason: `attention: 紧急中断（highest=${String(item.notice.highest)}）`,
       })
       agent.steer(message(withHint(item.notice.text, URGENT_HINT)))
+      // 硬切**结束**了这一轮；下面这句 steer 开的是**新一轮** —— 基准换成它。
+      this.currentPriority = item.notice.highest
     } else if (plan.kind === 'steer') {
       agent.steer(message(withHint(item.notice.text, WRAPUP_HINT)))
+      // ★ **不更新基准**：`steer` 不开始新 turn，被打断的那件事没有变
+      //   （她甚至可以「不管他」）。判据见 `currentPriority` 的注释。
     } else {
       agent.followup(message(item.notice.text))
+      this.currentPriority = item.notice.highest
     }
-
-    // 这一轮（或接下来这一轮）的注意力大小就是本条目的优先级。
-    this.currentPriority = item.notice.highest
 
     // ★ `> n` 的原任务被中断 —— 记一条待办（§20.4）。
     //

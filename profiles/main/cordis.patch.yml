@@ -76,37 +76,45 @@
             maxTokens: 8192
           # planner：写待办那条"恰好一行"的小模型（`interrupt_plan` 的快照 subagent）。
           #
-          # ## ⚠️ 它的思考**目前关不掉** —— 这是已知的、尚未解决的一处
+          # ## 关思考：`thinkingFormat: qwen` ＋ 声明 `reasoningEfforts`
           #
           # 这个模型默认会吐一大段**思考链**，而它要的输出只有一行。
           # （Shiraha 那边用 `extra_params: enable_thinking = false` 关掉，
           #   注释：「关闭思考：输出直接写入 content」。）
           #
-          # **裸 API 实测：顶层传 `enable_thinking: false` 有效** ——
-          #   `reasoning_content` 从"几千 token"变成 `null`，而 `content` 一模一样。
+          # pi-ai 的源码把机制写得很明白（`pi-ai/dist/api/openai-completions.js`）：
           #
-          # **但走 DSH 传不通**（临时探针实测，`ctx.llm.stream` 直接数分片）：
-          #   `compat: { chatTemplateKwargs: { enable_thinking: false } }`
-          #   → 分片里仍然有 **691 条 `reasoning-delta`**，思考照旧。
-          #   推测：pi-ai 把这些 kwargs 塞进**嵌套**的 `chat_template_kwargs` 对象，
-          #   而 SiliconFlow 认的是**顶层** `enable_thinking`。
+          #   :629  else if (compat.thinkingFormat === 'qwen' && model.reasoning)
+          #   :630      params.enable_thinking = !!options?.reasoningEffort;   // ★ 顶层
+          #   :638  else if (compat.thinkingFormat === 'qwen-chat-template' && model.reasoning)
+          #   :640      params.chat_template_kwargs = { enable_thinking: …, … }; // 嵌套
           #
-          # **下一步的两个候选**（都还没验）：
-          #   a) `compat.thinkingFormat: qwen`（DSH 的 `THINKING_FORMAT_GATE` 里有
-          #      `'qwen'` 与 `'qwen-chat-template'` 两档，是**专门**为这种方言准备的）
-          #      ＋ 在模型上声明 `reasoningEfforts`、在 TCB 里给 planner 设
-          #      `reasoningEffort`，让 pi-ai 自己按档位决定发什么
-          #   b) 换一个**默认不思考**的模型
+          # 所以两件事必须同时成立：
           #
-          # **代价说清楚**：现在每次写待办都会多烧几百条思考分片（钱 + 延迟），
-          # 但**功能是好的** —— 输出格式对、一行也守住了。
+          # 1. **`thinkingFormat: qwen`** —— 只有这样才发**顶层** `enable_thinking`
+          #    （SiliconFlow 认顶层；嵌套的 `chat_template_kwargs` 它不认 ——
+          #     上一版配的 `chatTemplateKwargs` 就栽在这儿，实测仍有 691 条 reasoning 分片）。
+          #    没有 `thinkingFormat` 时那个分支压根不进，一个参数都不发 ⇒ 吃 provider 默认（开着）。
           #
-          # ⚠️ 修的时候**只动这个模型，不要放到 provider 级** —— 这一路还跑着主模型
-          #   `DeepSeek-V3.2`，provider 级的 `compat` / `reasoning` 会连带改掉它。
-          #   （per-model 的 `compat` 逐字段覆盖 provider 的同名字段。）
+          # 2. **必须声明 `reasoningEfforts`** —— 因为那个分支还有一道门 `&& model.reasoning`，
+          #    而 `catalog.ts` 里 `model.reasoning` 的来源是：
+          #      · 不声明 `reasoningEfforts` ⇒ 继承 catalog 能力；我们这条路线是**手写**的、
+          #        没有 catalog ⇒ `reasoning: false` ⇒ **分支不进**（这就是上一版失败的另一半原因）
+          #      · 声明了档位 ⇒ `reasoning: true` ⇒ 分支进
+          #    声明它**不是为了用**（planner 从不请求思考档位），纯粹是让那道门打开；
+          #    而请求里没有 `reasoningEffort` ⇒ `!!undefined === false` ⇒ `enable_thinking: false` ✓
+          #
+          # ⚠️ 校验要求"至少有一个 off 之外的档位"（`catalog.ts`），所以不能只写 `off:`。
+          # ⚠️ **只加在这个模型上，绝不能放到 provider 级** —— 这一路还跑着主模型
+          #    `DeepSeek-V3.2`，provider 级的 `compat` / `reasoning` 会连带改掉它。
           - id: Qwen/Qwen3.5-27B
             name: Qwen3.5-27B
             maxTokens: 512
+            compat:
+              thinkingFormat: qwen
+            reasoningEfforts:
+              off:
+              high: high
           # VLM：★ 全仓唯一声明"这个模型收图"的地方。
           # `contextWindow` 不写 ⇒ 用 defaultContextWindow。
           # 实测它**不吐 reasoning**（-Instruct 那一支才是 Thinking 版）。

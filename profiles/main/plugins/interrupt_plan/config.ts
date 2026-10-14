@@ -55,6 +55,22 @@ export interface Config {
    * **临死前写、启动时注入一次、然后删掉**。
    */
   statePath: string
+  /**
+   * 是否启用**优雅关闭记账**（"上次是停下来的"）。
+   *
+   * ⚠️ **当前部署把它关掉了**（`cordis.patch.yml` 里 `shutdown: false`）。
+   *
+   * 为什么关：它的触发判据是**启发式的** —— 分不出"进程真的停了"和
+   * "**HMR 重载了本插件**"（见 `recordShutdown`）。开发期改文件频繁，
+   * 误报会往她的上下文里塞一条假的"上次停下来了"，**干扰实验**。
+   * 要根治得有一个真正的"应用正在关闭"信号，而 DSH 把 SIGINT/SIGTERM
+   * 收敛成同一个 `interrupt(code)`（`apps/cli/src/profile-boot.ts:280-281`），
+   * 插件侧看不出区别 —— **那是上游面的事**（TODO）。
+   *
+   * **没有默认值**：它是个已知不可靠的功能，宁可让部署显式表态，
+   * 也不要"悄悄开着"（DSH：配置要显式，不静默用一个不可靠的值）。
+   */
+  shutdown: boolean
 }
 
 /** 配置 schema。 */
@@ -64,4 +80,5 @@ export const Config: z<Config> = z.object({
   plannerTcb: z.string().min(1).default('planner'),
   sweepIntervalMs: z.natural().min(1000).default(10 * 60 * 1000),
   statePath: z.string(),
+  shutdown: z.boolean(),
 })

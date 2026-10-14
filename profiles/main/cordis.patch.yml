@@ -256,9 +256,9 @@
     # ★ 这就是"**用一条恢复路径，换掉整套上下文冻结机制**"里那条恢复路径 ——
     # 也正因为有它，主路径才不需要 fork / 结清 / 保"保证她一定回来"。
     #
-    # 五个可调项（§20.5）：T（timeoutMs）/ TTL（planTtlMs）/ planner TCB / 清扫周期
-    # / 关闭记录路径。不写就用插件里的默认值：T=2 分钟（§20.5 表里标的是【待定】，
-    # 这是起点值）、TTL=1 天、planner='planner'。想调就取消对应行的注释。
+    # 六个可调项（§20.5）：T（timeoutMs）/ TTL（planTtlMs）/ planner TCB / 清扫周期
+    # / 关闭记录路径 / 关闭记账开关。不写就用插件里的默认值：T=2 分钟（§20.5 表里
+    # 标的是【待定】，这是起点值）、TTL=1 天、planner='planner'。
     #
     # inject ['agents','db','tcb','pointer']：要 agent 注册表（建快照 subagent）、
     # 数据库（写待办）、TCB（拿 planner 的模型配置）、注意力焦点（**临死前要
@@ -266,9 +266,20 @@
     - id: interrupt-plan
       name: './plugins/interrupt_plan/index.ts'
       config:
-        # 优雅关闭记录（优雅关闭原理）：**临死前写、启动时注入一次、然后删掉**。
-        # 放 data/ 而不进数据库 —— 跟 pointer / tcb 同一个判据（"要不要给人改"）。
-        # 启动时由 qq-resident 调 `ctx.interruptPlan.announce(agent)` 注进去。
+        # ── 优雅关闭记账：★ **现在关着** ───────────────────────────────
+        #
+        # 它的触发判据是**启发式的** —— 分不出"进程真的停了"和"**HMR 重载了本插件**"
+        # （改一次插件文件就会卸载重装，disposer 会跑）。开发期误报会往她的上下文里
+        # 塞一条假的"上次停下来了"，**干扰实验**，所以先关掉。
+        #
+        # TODO（上游面）：要根治得有一个真正的"应用正在关闭"信号。DSH 现在把
+        # SIGINT/SIGTERM 收敛成同一个 `interrupt(code)`
+        # （apps/cli/src/profile-boot.ts:280-281），**插件侧看不出是哪种，
+        # 也看不出"这是关闭还是重载"**。要么上游把这个区分透出来，
+        # 要么我们换一个只有真关闭才会走的路径。
+        #
+        # 打开 = 把 `false` 改成 `true`（`statePath` 那时才用得上）。
+        shutdown: false
         statePath: !!js "process.env.DSH_HOME + '/data/last-shutdown.json'"
         # timeoutMs: 120000
         # planTtlMs: 86400000

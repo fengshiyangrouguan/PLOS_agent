@@ -215,13 +215,16 @@ export class InterruptPlan extends Service {
 
     // 读上次的关闭记录（优雅关闭原理）。这一刻**可能还没有 agent**，所以只读、
     // 不注入 —— 注入由 `announce()` 在常驻会话建好之后做。
-    this.loadShutdown()
+    //
+    // ⚠️ `config.shutdown` 为假时**整条路都不走**（连同下面 disposer 里的写）。
+    //    见 `Config.shutdown`：触发判据是启发式的，开发期 HMR 会误报。
+    if (this.config.shutdown) this.loadShutdown()
 
     yield async () => {
       this.disposed = true
       // ★ **先记账再清理**：下面的清理会把 `pending` / `children` 清空，
       //   而"当时有没有事在飞"正是记账要用的判据（见 `recordShutdown`）。
-      this.recordShutdown()
+      if (this.config.shutdown) this.recordShutdown()
       clearInterval(sweep)
 
       // 每条待办各自照看三样东西（定时器 / 创建中的 promise / subagent 句柄），

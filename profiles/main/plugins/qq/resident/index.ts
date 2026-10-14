@@ -170,6 +170,14 @@ export function apply(ctx: Context, config: Config): void {
       //     挂上它 → 补丁加一行，读 / 写 / 注入全活
       ctx.get('lastShutdown')?.announce(created.agent)
 
+      // 补投"上次没来得及投"的待办（`interrupt_plan` 的跨重启那一支）。
+      //
+      // 走 `ctx.get` 的理由与上面那行**一样也是"可选"**，但性质不同：
+      // `interrupt_plan` 在我们装配里是**常挂的**，用 `ctx.get` 只是**不让它变成
+      // resident 的硬依赖** —— 那样把恢复路径摘掉时，常驻会话仍然起得来。
+      // 投递本身是幂等的（只投 `state = 'pending'` 的），所以多叫一次无害。
+      ctx.get('interruptPlan')?.announce(created.agent)
+
       // 补打各设施的启动自述（db / tcb / pointer）。
       // 它们跑在挂载早期，那一刻还没有终端出口；本行是补丁层的【最后一行】，
       // 到这里出口才就绪。**换掉最后一行时要跟着改这里。**

@@ -165,6 +165,46 @@ function remaining(expiresAt: number, now: number): string {
 }
 
 /**
+ * 把**一批待办**渲染成**一条**消息。
+ *
+ * ## 为什么是批量的
+ *
+ * 投递推迟到她 `idle`（见 `interrupt_plan` 的 `deliver()`），所以她忙的那段时间里
+ * **可能积下好几条**。分成几条消息投，会把"她忙完"那一刻打成连珠炮；
+ * 一条消息里编号列出来，既省一次投递，也让她一眼看到全貌。
+ *
+ * **`N === 1` 时退化成单条形态**（{@link renderPlan} 的措辞原样保留）——
+ * 那是最常见的情况，不该为批量的形状付代价。
+ *
+ * @param plans - 要投递的待办（调用方已排好序）。
+ * @param now - 现在（毫秒）。注入以便自检。
+ * @returns 注入正文；**全都过期时返回 `undefined`**（调用方据此不注入）。
+ */
+export function renderPlans(plans: readonly PlanRenderInput[], now: number): string | undefined {
+  const live = plans.filter(plan => plan.expiresAt > now)
+  if (live.length === 0) return undefined
+
+  const only = live[0]
+  if (only === undefined) return undefined
+  if (live.length === 1) return renderPlan(only, now)
+
+  const body = live.map((plan, index) => [
+    `${String(index + 1)}. 你之前正在：${plan.what}`,
+    `   被打断的原因：${plan.why}`,
+    `   想接着做的话，从会话 ${plan.sessionId} 第 ${String(plan.turn)} 轮那里看起`
+    + `（seq=${String(plan.seq)}，可以用 session_event_read 取回那一轮的上下文）。`,
+    `   （这条记于 ${new Date(plan.createdAt).toISOString()}，${remaining(plan.expiresAt, now)}。）`,
+  ].join('\n')).join('\n\n')
+
+  return [
+    `【${String(live.length)} 件没做完的事】`,
+    body,
+    '',
+    '要不要接着做由你决定；如果你已经不打算管它们了，忽略这条就行。',
+  ].join('\n')
+}
+
+/**
  * 把一条待办渲染成注入她上下文的那段文本。
  *
  * ## 为什么要有这一段（§20.7）

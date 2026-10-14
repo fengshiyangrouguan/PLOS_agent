@@ -29,7 +29,8 @@
 
 import assert from 'node:assert/strict'
 import {
-  WHAT_LABEL, WHAT_PLACEHOLDER, WRITER_TASK, parseWhat, renderPlan, writerTaskFor,
+  WHAT_LABEL, WHAT_PLACEHOLDER, WRITER_TASK, parseWhat, renderPlan, renderPlans, writerTaskFor,
+  type PlanRenderInput,
 } from '../render.ts'
 
 let passed = 0
@@ -203,6 +204,51 @@ function checkTrue(label: string, actual: boolean): void {
   checkTrue('不满 1 分钟也显示 1 分钟（不写 0）', at(1).includes('还能记 1 分钟'))
   checkTrue('还差 5 小时', at(5 * 3_600_000).includes('还能记 5 小时'))
   checkTrue('23 小时 59 分按小时算', at(24 * 3_600_000 - 60_000).includes('还能记 23 小时'))
+}
+
+// ── renderPlans：批量投递（投递推迟到她 idle，所以可能积下好几条）────
+{
+  const now = 1_000_000_000_000
+  const live = now + 3_600_000
+  const plan = (id: number, what: string, expiresAt: number): PlanRenderInput => ({
+    sessionId: `s${String(id)}`,
+    turn: id,
+    seq: id * 10,
+    what,
+    why: `原因${String(id)}`,
+    createdAt: now,
+    expiresAt,
+  })
+
+  checkTrue('空数组 → undefined（不注入）', renderPlans([], now) === undefined)
+
+  const one = renderPlans([plan(1, '写接线', live)], now) ?? ''
+  checkTrue('★ 只有一条时退化成单条形态（保留原开场词）', one.includes('【一件没做完的事】'))
+  checkTrue('单条形态不带编号', !one.includes('1. '))
+
+  const two = renderPlans([plan(1, '写接线', live), plan(2, '改文档', live)], now) ?? ''
+  checkTrue('★ 多条时批量开场并报条数', two.includes('【2 件没做完的事】'))
+  checkTrue(
+    '★ 每条编号（顺序 = 传入顺序）',
+    two.includes('1. 你之前正在：写接线') && two.includes('2. 你之前正在：改文档'),
+  )
+  checkTrue(
+    '★ 每条的坐标各自齐全，不会串',
+    two.includes('会话 s1 第 1 轮') && two.includes('seq=10')
+    && two.includes('会话 s2 第 2 轮') && two.includes('seq=20'),
+  )
+  checkTrue(
+    '★ 开场与结尾**各只出现一次**（不是把几段整篇拼起来）',
+    two.split('【').length === 2 && two.split('由你决定').length === 2,
+  )
+  checkTrue('★ 批量时结尾用"它们"（指向多条）', two.includes('不打算管它们了'))
+
+  const expired = renderPlans([plan(1, 'a', now - 1), plan(2, 'b', now - 1)], now)
+  checkTrue('★ 全都过期 → undefined', expired === undefined)
+
+  const mixed = renderPlans([plan(1, '甲任务', now - 1), plan(2, '乙任务', live)], now) ?? ''
+  checkTrue('★ 过期的被滤掉、且不占编号', !mixed.includes('甲任务') && mixed.includes('乙任务'))
+  checkTrue('★ 滤完只剩一条 → 退化成单条形态', mixed.includes('【一件没做完的事】'))
 }
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

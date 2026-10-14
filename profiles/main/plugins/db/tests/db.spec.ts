@@ -242,9 +242,9 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   }, 1000)
   check('插入返回 id', id, 1)
   check(
-    '★ 一写出来就是 surfaced —— 没有 pending 中间态（写它和浮进上下文是同一刻）',
+    '★ 一写出来是 pending —— 写下来了，但【还没投给她】（投递推迟到她 idle）',
     store.list()[0]?.state,
-    'surfaced',
+    'pending',
   )
   check('生命周期 = now + ttl', store.list()[0]?.expiresAt, 1000 + ttl)
   check(
@@ -252,7 +252,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
     [store.list()[0]?.turn, store.list()[0]?.seq],
     [7, 123],
   )
-  check('未落定计数', store.openCount(), 1)
+  check('★ 新写的就在"待投递"里', store.list('pending').map(r => r.id), [id])
 
   const second = store.insert({
     sessionId: 'plos-baiyu', turn: 9, seq: 140, priority: 80,
@@ -260,15 +260,25 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   }, 2000)
   check('时间降序', store.list().map(r => r.turn), [9, 7])
 
-  check('settle(done) 改到了行', store.settle(id, 'done', 3000), true)
-  check('★ 已落定的不会被改第二次', store.settle(id, 'dropped', 4000), false)
-  check('落定时刻写进去了', store.list('done')[0]?.settledAt, 3000)
+  // ── 投递：pending → surfaced，而且**仍然未结清** ────────────────────
+  check('投递标记改到了行', store.markState(id, 'surfaced', 3000), true)
+  check('状态变成 surfaced', store.list('surfaced').map(r => r.id), [id])
+  check(
+    '★ surfaced **不写 settledAt** —— 它仍然是一件没做完的事，还在"未结清"里',
+    [store.list('surfaced')[0]?.settledAt, store.list().map(r => r.turn)],
+    [undefined, [9, 7]],
+  )
+  check('★ 投过的不再出现在"待投递"里（投递因此是幂等的）', store.list('pending').map(r => r.id), [second])
+
+  // ── 落定 ───────────────────────────────────────────────────────────
+  check('markState(done) 改到了行', store.markState(id, 'done', 4000), true)
+  check('★ 已落定的不会被改第二次', store.markState(id, 'dropped', 5000), false)
+  check('落定时刻写进去了', store.list('done')[0]?.settledAt, 4000)
   check('落定后不在默认列表里', store.list().map(r => r.turn), [9])
 
   check('还没到期时 expire 不动它', store.expire(2000 + ttl - 1), 0)
   check('到期后 expire 丢掉它', store.expire(2000 + ttl), 1)
   check('丢掉的状态是 dropped', store.list('dropped').map(r => r.id), [second])
-  check('丢掉后未落定为零', store.openCount(), 0)
   db.close()
 }
 

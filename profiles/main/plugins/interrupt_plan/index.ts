@@ -69,7 +69,7 @@ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import { Config as ConfigSchema, type Config } from './config.ts'
-import { parseWhat, renderPlan, writerTaskFor, type PlanCoordinates } from './render.ts'
+import { parseWhat, renderPlans, writerTaskFor, type PlanCoordinates } from './render.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -166,6 +166,91 @@ export class InterruptPlan extends Service {
   }
 
   /**
+   * 常驻 agent 就绪时叫一声 —— **补投"上次没来得及投"的待办**（跨重启）。
+   *
+   * 由 `qq/resident` 建完常驻会话之后调。走**可选服务**那条路
+   * （`ctx.get('interruptPlan')?.announce(agent)`，跟 `last_shutdown` 同一个形状）：
+   * 没挂这个插件时那一行短路，**影响为零**。
+   *
+   * 形状跟 `last_shutdown.announce` 一致的原因也一样：**那一刻才有 agent 可以投**
+   * （本插件激活时 `ctx.agents` 还是空的）。
+   *
+   * @param agent - 刚建好的常驻 agent。
+   */
+  announce(agent: Agent): void {
+    this.deliver(agent)
+  }
+
+  /**
+   * 把**所有还没投递**的待办合成一条消息投给她 —— **只在她 `idle` 时**。
+   *
+   * ## 为什么"她 idle"才投
+   *
+   * `inject` 本身**不唤醒**（不用 `followup` / `steer`），看起来够客气了；
+   * 但它的语义是两支：
+   *
+   * > A **running** driver claims it at the **nearest later step boundary**;
+   * > **idle** drivers leave it pending until follow-up or steering wakes them.
+   * > （`packages/core/agent/src/runtime-types.ts:233-241`）
+   *
+   * 也就是**她还在跑的时候，它会在下一个 step 边界就被领走** —— 正好是
+   * "救火救到一半，上下文里冒出一条『你还有件事没做完』"。
+   * 而那条待办的优先级**低于**打断她的事（`≥ m` 才硬 cancel，见 §五），
+   * 所以那是**把注意力往回拉**，与 §二 的统领原则相反。
+   *
+   * 等她 `idle` 再投，才是"她想起来"的自然时刻。
+   *
+   * ## 为什么每次都从表里查，不在内存里排队
+   *
+   * 为了**跨重启正确**：进程在她忙的时候重启，那些已经落库但还没投出去的待办
+   * 必须仍然能浮出来。所以"还没投递"住在表里（`state = 'pending'`），
+   * 内存里不留第二份真相。三个触发点（`agent/status → idle` / 刚写完时 /
+   * 启动时的 `announce`）都只是"现在试一下"，**投递本身是幂等的**。
+   *
+   * @param agent - 投给谁；省略时按焦点（`ctx.pointer`）解析。
+   * @returns 投出去几条（0 = 没投）。
+   */
+  private deliver(agent: Agent | undefined = this.resolveAgent()): number {
+    if (agent === undefined || agent.status !== 'idle') return 0
+
+    const store = this.ctx.db.interruptPlans
+    const now = Date.now()
+    // 先把过期的清掉 —— 过期的不该端上去（`renderPlans` 也会再滤一遍，双保险）。
+    store.expire(now)
+    const plans = store.list('pending')
+    if (plans.length === 0) return 0
+
+    const text = renderPlans(plans, now)
+    if (text === undefined) return 0
+
+    agent.inject(createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind: 'interrupt-plan', planId: plans.map(plan => String(plan.id)).join(',') },
+    }))
+    for (const plan of plans) store.markState(plan.id, 'surfaced', now)
+
+    this.ctx.logger.info(
+      `interrupt-plan: 已投递 ${String(plans.length)} 条待办 —— `
+      + plans.map(plan => plan.what).join('；'),
+    )
+    return plans.length
+  }
+
+  /**
+   * 按**焦点**解析"哪个 agent 才是白羽"。
+   *
+   * 不能只看 `agents.list()`：快照 subagent **也是在册 agent**，
+   * 所以"哪个才是白羽"必须有人明确回答 —— 那就是 `ctx.pointer`（§6.4）。
+   *
+   * @returns 白羽；焦点没设、或那个 agent 不在册时 `undefined`。
+   */
+  private resolveAgent(): Agent | undefined {
+    const sessionId = this.ctx.pointer.current?.sessionId
+    if (sessionId === undefined) return undefined
+    return this.ctx.agents.list().find(item => item.id === sessionId)
+  }
+
+  /**
    * 构造完成之后运行：起 TTL 清扫定时器，并交出卸载清理。
    *
    * 两个定时器都在 `yield` **之前**建好 —— 这样"创建了却没被清理"的窗口为零。
@@ -185,16 +270,21 @@ export class InterruptPlan extends Service {
       }
     }, this.config.sweepIntervalMs)
 
-    // ★ 这里**故意不订阅 `agent/status`**。
+    // ★ 订阅 `agent/status` —— **只用来投递，绝不用来结清**。
     //
-    // 一度想过"她回到 `idle` 就把待办收掉"，那是**错的**：§20.3 情形② 明说
-    // 「就简发个消息，然后就回来继续聊天了……**AI 自己思维链注入了性格后
-    // 选不选回来就是他的问题了**」。也就是说**"她空下来了"不等于"她回去做那件事了"**
-    // —— 她完全可能答一句就停在那里，那件被打断的事仍然没做完。
-    // 真收了待办，"她想起来还有件事没做完"这条恢复路径就断了。
+    // 这两件事必须分清，因为它们的判据刚好看似相同、结论相反：
     //
-    // 所以"这次中断结没结"只能靠 `T` 之外的**真实判据**，而眼下没有那个判据
+    // | 用途 | 能用"她 idle"当判据吗 |
+    // |:--|:--|
+    // | **投递**（把待办交到她手上，见 `deliver()`） | ✅ **能，而且正是要的** —— 待办记的是**被打断的那件事**，它的优先级**低于**打断它的事；她还在救火时把它塞进上下文，等于把注意力往回拉 |
+    // | **结清**（把待办收掉） | ❌ **绝不能** —— §20.3 情形② 明说「就简发个消息，然后就回来继续聊天了……AI 自己思维链注入了性格后**选不选回来就是他的问题了**」。**"她空下来了"不等于"她回去做那件事了"**：她完全可能答一句就停在那里，那件被打断的事仍然没做完。真按 idle 收掉，"她想起来还有件事没做完"这条恢复路径就断了 |
+    //
+    // 所以"这次中断结没结"仍然只能靠 `T` 之外的**真实判据**，而眼下没有那个判据
     // —— 留给下一轮（一个已知的粗糙处，见 `note` 的说明）。
+    this.ctx.on('agent/status', ({ status }) => {
+      if (status !== 'idle') return
+      this.deliver()
+    })
 
     yield async () => {
       this.disposed = true
@@ -439,7 +529,6 @@ export class InterruptPlan extends Service {
       //   不绕模型一圈 —— 理由见 `render.ts` 的 `WRITER_TASK`。
       const what = parseWhat(this.lastAssistantText(child))
       const now = Date.now()
-      const expiresAt = now + this.config.planTtlMs
 
       // 落定之前先清一遍过期的 —— 别把一条已经没意义的待办端上去。
       this.ctx.db.interruptPlans.expire(now)
@@ -451,25 +540,17 @@ export class InterruptPlan extends Service {
         ttlMs: this.config.planTtlMs,
       }, now)
 
-      const plan = renderPlan({
-        ...pending.coordinates,
-        what,
-        why: pending.why,
-        createdAt: now,
-        expiresAt,
-      }, now)
-
-      if (plan !== undefined) {
-        // `inject` **不唤醒** —— 她闲时等下一次唤醒（`perception` 的闲时定时器，
-        // 或下一条信号），正合用（§20.7 的恢复路径就是那么走的）。
-        pending.agent.inject(createUserMessage({
-          content: [{ type: 'text', text: plan }],
-          source: { kind: 'interrupt-plan', planId: id },
-        }))
-      }
+      // ★ **这里不投递** —— 投递推迟到她 `idle`（见 `deliver()`）。
+      //
+      // 理由：这条待办记的是**被打断的那件事**，它的优先级**低于**打断它的事；
+      // 而她此刻大概率**正在跑**（`T` 默认才 2 分钟），`inject` 会在下一个
+      // step 边界就被领走 —— 等于把注意力往回拉。
+      //
+      // 这里仍然试一下，是为了覆盖"T 到点时她已经闲了"那一支。
+      this.deliver(pending.agent)
 
       this.ctx.logger.info(
-        `interrupt-plan: 待办已浮进上下文（${id}）—— ${what}`,
+        `interrupt-plan: 待办已落库（${id}）—— ${what}；等她空下来再投递`,
       )
     } catch (error) {
       this.ctx.logger.warn(

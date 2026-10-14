@@ -325,9 +325,17 @@ export class PerceptionStore {
 
 /** 待办的状态。 */
 export type InterruptPlanState =
-  /** 已写出来、也浮进了上下文，等她处理。 */
+  /**
+   * **已经写下来了，但还没投给她。**
+   *
+   * 投递推迟到她 `idle`（见 `interrupt_plan` 的 `deliver()`）——
+   * 因为这条待办记的是**被打断的那件事**，而它的优先级**低于**打断它的事；
+   * 在她还在做那件更高优先级的事时把它塞进上下文，等于把注意力往回拉。
+   */
+  | 'pending'
+  /** **已投递**：真的浮进过她的上下文，等她处理。 */
   | 'surfaced'
-  /** 她处理掉了。 */
+  /** 她处理掉了。★ **目前不可达** —— 没有"她真的做了"这个信号，故意不去猜。 */
   | 'done'
   /** 丢掉了 —— 过期，或者那件事已经过去（群里早聊完了）。 */
   | 'dropped'
@@ -427,6 +435,9 @@ export class InterruptPlanStore {
   /**
    * 写一条待办。
    *
+   * ★ 新行是 **`'pending'`**（写下来了、**还没投给她**）——
+   * 投递推迟到她 `idle`，投出去时才 `markState(id, 'surfaced', …)`。
+   *
    * @param draft - 内容。
    * @param now - 现在（毫秒）。注入以便自检。
    * @returns 新行的 id。
@@ -434,7 +445,7 @@ export class InterruptPlanStore {
   insert(draft: InterruptPlanDraft, now: number): number {
     const result = this.#db.prepare(`
       INSERT INTO interrupt_plan (created_at, session_id, turn, seq, priority, what, why, state, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'surfaced', ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
     `).run(
       now, draft.sessionId, draft.turn, draft.seq, draft.priority,
       draft.what, draft.why, now + draft.ttlMs,
@@ -456,34 +467,34 @@ export class InterruptPlanStore {
   }
 
   /**
-   * 落定一条。
+   * **推进**一条待办的状态 —— 唯一的消费者是投递（`interrupt_plan` 的 `deliver()`）。
    *
-   * ## ⚠️ 这个方法是**没有生产调用方**的（别以为它在跑）
+   * ## ★ `settled_at` 只在**落定态**才写
    *
-   * 全仓唯一的调用点是 `tests/db.spec.ts`。生产路径只写两种状态：
+   * | 状态 | 写 `settled_at`？ | 含义 |
+   * |:--|:--|:--|
+   * | `'pending'` / `'surfaced'` | **不写** | 还没结束 —— `list()` 默认就是 `settled_at IS NULL`，即"还没结束的" |
+   * | `'done'` / `'dropped'` | 写 | 落定了 |
    *
-   * | 谁 | 写下什么 |
-   * |:--|:--|
-   * | `insert()` | `surfaced`（一写出来就是它 —— 写待办和浮进上下文是同一刻） |
-   * | `expire()` | `dropped`（TTL 到期，**批量 UPDATE**，不走这个方法） |
+   * 这个区分是**必须**的：**投递之后它仍然是一件没做完的事**，不该从"未结清"里消失。
+   * （这也是它与前任 `settle()` 的关键差别 —— 那个对任何状态都写 `settled_at`，
+   * 所以**当不了投递标记**。）
    *
-   * **于是 `'done'` 目前是不可达的** —— 没有"她真的把这件事做了"这个信号，
-   * 而**故意不去猜**：靠启发式（比如"她回话了就算做了"）会给表里写入
-   * 看起来确定、实际是猜的状态，比空着更糟。
+   * ## ⚠️ `'done'` 仍然不可达
    *
-   * 留着它的理由：`'done'` 是这条生命周期的一部分（`InterruptPlanState`
-   * 的三态），而这是**唯一**能写下它的方法。真接上"她处理掉了"这个信号时
-   * （那需要一个新的可观测判据），调用点在这里。
+   * 没有"她真的把这件事做了"这个信号，而**故意不去猜**：靠启发式
+   * （比如"她回话了就算做了"）会给表里写入**看起来确定、实际是猜**的状态，比空着更糟。
    *
    * @param id - 待办 id。
-   * @param state - `done`（处理掉了）或 `dropped`（那件事已经过去）。
+   * @param state - 要推进到的状态。
    * @param now - 现在（毫秒）。
-   * @returns 是否真的改到了行（已落定的不会被改第二次）。
+   * @returns 是否真的改到了行（**已落定的不会被改第二次**）。
    */
-  settle(id: number, state: 'done' | 'dropped', now: number): boolean {
+  markState(id: number, state: InterruptPlanState, now: number): boolean {
+    const settledAt = state === 'done' || state === 'dropped' ? now : null
     const result = this.#db.prepare(
       'UPDATE interrupt_plan SET state = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL',
-    ).run(state, now, id)
+    ).run(state, settledAt, id)
     return Number(result.changes) > 0
   }
 
@@ -501,16 +512,10 @@ export class InterruptPlanStore {
     return Number(result.changes)
   }
 
-  /** 还没落定的有几条（诊断用）。 */
-  openCount(): number {
-    const row = this.#db.prepare(
-      'SELECT COUNT(*) AS n FROM interrupt_plan WHERE settled_at IS NULL',
-    ).get() as { n: number }
-    return row.n
-  }
 }
 
-/** 一条图片描述。 */
+/**
+ * 一条图片描述。 */
 export interface ImageDescriptionRow {
   /** 图片**原始字节**的 sha256（十六进制）。 */
   readonly hash: string

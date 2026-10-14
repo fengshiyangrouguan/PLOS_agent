@@ -64,17 +64,12 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { recordStartupLine } from '../_startup-log.ts'
+import { markOf, type SessionMark } from '../_session-mark.ts'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId, SessionLogOffset, SessionSeq, buildForkSeed, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import { Config as ConfigSchema, type Config } from './config.ts'
-import {
-  parseWhat, renderPlan, renderShutdown, writerTaskFor,
-  type PlanCoordinates, type ShutdownRecord,
-} from './render.ts'
+import { parseWhat, renderPlan, writerTaskFor, type PlanCoordinates } from './render.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -116,26 +111,20 @@ interface Pending {
 }
 
 /**
- * 中断那一刻**一次性取定**的东西：坐标 + fork seed。
+ * ⚠️ **"坐标 + seed 必须一起取定"这条不变量现在住在共享模块里。**
  *
- * ★ 它存在的唯一理由是**把一条隐式时序约束变成显式的**。
- *
- * 早先的写法是：`note()` 里算坐标（同步取一次 `snapshotEvents()`），
- * 然后调 `createChild()`，而**它的前卫里又取一次并重算 boundary**。
+ * 它原先在这里是一个 `Snapshot` 接口 —— 为的是把"`note()` 算坐标、
+ * `createChild()` 又重算一遍"这条**跨函数的隐式时序约束**变成显式的。
  * 那在今天是对的，**只因为 `createChild` 的第一个 `await` 恰好排在那之后** ——
- * 将来任何人往它前面插一个 `await`（或一个 `void` 掉的 promise），
- * 边界就静默后移，**快照变成"被打断【之后】"的状态，整个机制的意义反过来**，
- * 而且不报错。
+ * 有人在它前面插一个 `await`（或一个 `void` 掉的 promise），边界就静默后移，
+ * **快照变成"被打断【之后】"的状态，整个机制的意义反过来**，而且不报错。
  *
- * 现在 seed 和坐标在同一句里取定，`createChild` 只是消费者。
+ * 现在 `last_shutdown` 也要用同一份坐标，于是它搬到了
+ * [`markOf()`](../_session-mark.ts)：那边一次 `snapshotEvents()` 把
+ * **坐标和 seed 一起**返回，**调用方无法把它拆开**。
+ *
+ * 本文件只需要记住一条：**`markOf()` 必须同步调**（不要在 `await` 之后）。
  */
-interface Snapshot {
-  readonly coordinates: PlanCoordinates
-  /** 已经合成的 fork seed（含 `end-seed` 与开着的 turn 的 forked 收尾）。 */
-  readonly seed: readonly SessionEvent[]
-  /** seed 覆盖到的最后一个事件序号。 */
-  readonly boundary: number
-}
 
 /**
  * 中断待办设施，注册为 `ctx.interruptPlan`。
@@ -161,12 +150,6 @@ export class InterruptPlan extends Service {
   private readonly children = new Map<string, AgentHandle>()
   /** 卸载后到达的定时器 / 创建结果一律作废。 */
   private disposed = false
-  /**
-   * 上次进程停止时留下的记录（优雅关闭原理）。
-   *
-   * 启动时从 `config.statePath` 读进来，由 {@link announce} 注入一次后清掉。
-   */
-  private shutdown: ShutdownRecord | undefined
 
   /**
    * @param ctx - 本插件的上下文。
@@ -213,18 +196,8 @@ export class InterruptPlan extends Service {
     // 所以"这次中断结没结"只能靠 `T` 之外的**真实判据**，而眼下没有那个判据
     // —— 留给下一轮（一个已知的粗糙处，见 `note` 的说明）。
 
-    // 读上次的关闭记录（优雅关闭原理）。这一刻**可能还没有 agent**，所以只读、
-    // 不注入 —— 注入由 `announce()` 在常驻会话建好之后做。
-    //
-    // ⚠️ `config.shutdown` 为假时**整条路都不走**（连同下面 disposer 里的写）。
-    //    见 `Config.shutdown`：触发判据是启发式的，开发期 HMR 会误报。
-    if (this.config.shutdown) this.loadShutdown()
-
     yield async () => {
       this.disposed = true
-      // ★ **先记账再清理**：下面的清理会把 `pending` / `children` 清空，
-      //   而"当时有没有事在飞"正是记账要用的判据（见 `recordShutdown`）。
-      if (this.config.shutdown) this.recordShutdown()
       clearInterval(sweep)
 
       // 每条待办各自照看三样东西（定时器 / 创建中的 promise / subagent 句柄），
@@ -248,129 +221,6 @@ export class InterruptPlan extends Service {
   }
 
   /**
-   * 启动时把"上次是停下来的"注入她的上下文，**只做一次**。
-   *
-   * 由 `qq/resident` 在建完常驻会话之后调用 —— **那一刻才有 agent 可以注入**
-   * （本插件激活时还没有）。注入后把存档删掉：这条信息只对**紧接的那一次启动**
-   * 有意义，留着只会在下次启动时重复一遍。
-   *
-   * @param agent - 刚建好的常驻 agent。
-   */
-  announce(agent: Agent): void {
-    const record = this.shutdown
-    this.shutdown = undefined
-    if (record === undefined) return
-    try {
-      agent.inject(createUserMessage({
-        content: [{ type: 'text', text: renderShutdown(record) }],
-        source: { kind: 'interrupt-plan', planId: 'shutdown' },
-      }))
-      this.ctx.logger.info(
-        `interrupt-plan: 已注入上次的关闭记录（停在 ${record.sessionId} 第 ${String(record.turn)} 轮）`,
-      )
-    } catch (error) {
-      this.ctx.logger.warn(
-        'interrupt-plan: 注入关闭记录失败：%o',
-        error instanceof Error ? error.message : String(error),
-      )
-    }
-    this.dropShutdownFile()
-  }
-
-  /** 读上次的关闭记录；文件不存在是正常的（第一次跑，或上次是崩的）。 */
-  private loadShutdown(): void {
-    let raw: unknown
-    try {
-      raw = JSON.parse(readFileSync(this.config.statePath, 'utf8')) as unknown
-    } catch (error) {
-      const code = (error as { code?: string }).code
-      if (code !== 'ENOENT') {
-        this.ctx.logger.warn(
-          'interrupt-plan: 关闭记录读失败，按"没有"继续：%o',
-          error instanceof Error ? error.message : String(error),
-        )
-      }
-      return
-    }
-    if (typeof raw !== 'object' || raw === null) return
-    const candidate = raw as Record<string, unknown>
-    if (typeof candidate['sessionId'] !== 'string'
-      || typeof candidate['turn'] !== 'number'
-      || typeof candidate['seq'] !== 'number') {
-      this.ctx.logger.warn(`interrupt-plan: 关闭记录形状不对（${this.config.statePath}），忽略`)
-      return
-    }
-    this.shutdown = {
-      sessionId: candidate['sessionId'],
-      turn: candidate['turn'],
-      seq: candidate['seq'],
-      at: typeof candidate['at'] === 'number' ? candidate['at'] : 0,
-      reason: typeof candidate['reason'] === 'string' ? candidate['reason'] : '原因未记录',
-    }
-    // 启动自述：那一刻还没有终端出口，所以先登记、由补丁层最后一行补打。
-    recordStartupLine(
-      `interrupt-plan: 上次停在 ${this.shutdown.sessionId} 第 ${String(this.shutdown.turn)} 轮（启动时注入）`,
-    )
-  }
-
-  /**
-   * 临死前记一笔（**优雅关闭原理**）。
-   *
-   * ## ★ 只在"确实有事在飞"时写
-   *
-   * 判据是**有一条待办窗口开着，或者她正在跑**。这一个判据同时干掉两件事：
-   *
-   * 1. **空转时的无意义记录** —— 她闲着被停掉，本来就没有"没做完的事"要提醒。
-   * 2. **HMR 重载造成的假记录** —— 我们的补丁层开着 HMR，改一次插件文件就会
-   *    卸载重装（disposer 会跑），而那时她通常是闲的。
-   *
-   * ⚠️ **它记不到"为什么关闭"的真正原因**：我们只能观测到"进程停了"，
-   * 分不出 SIGINT / SIGTERM / 正常退出（`apps/cli/src/profile-boot.ts:280-281`
-   * 把两者都收敛成 `interrupt(code)`）。所以 `reason` 只描述**当时有什么在飞**。
-   *
-   * **同步写**（`writeFileSync` + 改名）—— 关闭路径上不能等异步。
-   */
-  private recordShutdown(): void {
-    try {
-      const sessionId = this.ctx.pointer.current?.sessionId
-      if (sessionId === undefined) return
-      const agent = this.ctx.agents.list().find(item => item.id === sessionId)
-      if (agent === undefined) return
-      if (this.pending.size === 0 && agent.status !== 'running') return
-
-      const record: ShutdownRecord = {
-        ...this.snapshotOf(agent).coordinates,
-        at: Date.now(),
-        reason: this.pending.size > 0 ? '当时有一条中断还没处理完' : '你当时正在做事',
-      }
-      mkdirSync(dirname(this.config.statePath), { recursive: true })
-      const tmp = `${this.config.statePath}.tmp`
-      writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, 'utf8')
-      renameSync(tmp, this.config.statePath)
-    } catch (error) {
-      // 记不下来只是少一条提醒，**不该让关闭流程炸**。
-      this.ctx.logger.warn(
-        'interrupt-plan: 关闭记录写失败：%o',
-        error instanceof Error ? error.message : String(error),
-      )
-    }
-  }
-
-  /** 删掉关闭记录存档（注入之后）。删不掉只是下次会重复一遍，不致命。 */
-  private dropShutdownFile(): void {
-    try {
-      unlinkSync(this.config.statePath)
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'ENOENT') {
-        this.ctx.logger.warn(
-          'interrupt-plan: 关闭记录删不掉，下次启动会再注入一遍：%o',
-          error instanceof Error ? error.message : String(error),
-        )
-      }
-    }
-  }
-
-  /**
    * 记一次中断：**同步取边界**，然后异步起快照 subagent 并等 `T`。
    *
    * ## ⚠️ 一处已知的粗糙：`T` 只看时间，不看"这次中断结没结"
@@ -389,20 +239,20 @@ export class InterruptPlan extends Service {
    * @returns 这次中断的编号。
    */
   note(note: InterruptNote): string {
-    // ★ **这一句**里取定一切：坐标 + seed，同一个同步块。
-    //   不变量从"两个函数的相对时序"塌缩成一条语句 —— 见 `Snapshot` 的说明。
-    const snapshot = this.snapshotOf(note.agent)
+    // ★ **这一句**里取定一切：坐标 + seed，一次 `snapshotEvents()`。
+    //   那条不变量现在住在 `markOf()` 里 —— 见文件顶部那段说明。**必须同步调。**
+    const mark = markOf(note.agent)
     const id = randomUUID()
     this.pending.set(id, {
       agent: note.agent,
-      coordinates: snapshot.coordinates,
+      coordinates: { sessionId: mark.sessionId, turn: mark.turn, seq: mark.seq },
       why: note.why,
       priority: note.priority,
     })
 
     // 起快照 subagent。存的是"已经吞掉失败"的那一条 ——
     // 卸载时 `await` 它不会因为失败而炸。
-    const creating = this.createChild(id, note.agent, snapshot)
+    const creating = this.createChild(id, note.agent, mark)
       .catch((error: unknown) => {
         // 建不起来只损失这一次待办 —— 她的会话本来就还留着那件被打断的事（§20.7）。
         this.ctx.logger.warn(
@@ -421,8 +271,8 @@ export class InterruptPlan extends Service {
     this.timers.set(id, timer)
 
     this.ctx.logger.info(
-      `interrupt-plan: 已记下中断（${id}，第 ${String(snapshot.coordinates.turn)} 轮，`
-      + `seq=${String(snapshot.coordinates.seq)}，priority=${String(note.priority)}）`
+      `interrupt-plan: 已记下中断（${id}，第 ${String(mark.turn)} 轮，`
+      + `seq=${String(mark.seq)}，priority=${String(note.priority)}）`
       + `—— ${String(Math.round(this.config.timeoutMs / 1000))}s 后写待办`,
     )
     return id
@@ -470,45 +320,9 @@ export class InterruptPlan extends Service {
   }
 
   /**
-   * **同步**取"中断那一刻"的全部东西：坐标 + fork seed。
-   *
-   * 三样一起取定，因为它们本来就来自同一份 log：
-   * - `seq`：最后那个事件的编号。DSH 的 seq 连续从 0 起，所以"最后一个"就是 `length - 1`。
-   * - `turn`：**最后一个 `turn/end` 的编号** —— 也就是"她没写完的那一轮"的编号。
-   *   取 `turn/end` 而不是简单地把 turn 记成 `length`，因为一轮可以有几十个事件，
-   *   而 §20.10 定案"人说的'轮'就是 turn"，所以要取真正的轮号。
-   * - `seed`：**必须在这里合成**，不能留给 `createChild`（见 `Snapshot` 的说明）。
-   *
-   * 一个 `turn/end` 都没有时（会话刚起来）`turn` 落到 `0`：`renderPlan` 照旧渲染，
-   * 她读到的是"从第 0 轮看起"，而 `session_event_read(seq)` 那个坐标仍然是对的
-   * —— **两个坐标都在，错的那个也不致命**。
-   *
-   * @param agent - 白羽。
-   * @returns 坐标 + seed + boundary。
-   */
-  private snapshotOf(agent: Agent): Snapshot {
-    const events = agent.session.snapshotEvents()
-    const last = events.at(-1)
-    const boundary = last?.seq ?? SessionSeq(0)
-    let turn = 0
-    for (const event of events) {
-      if (event.type === 'turn/end') turn = event.data.turn
-    }
-    return {
-      coordinates: {
-        sessionId: String(agent.session.id),
-        turn,
-        seq: last === undefined ? 0 : Number(last.seq),
-      },
-      seed: buildForkSeed(events, boundary),
-      boundary: Number(boundary),
-    }
-  }
-
-  /**
    * 建快照 subagent。
    *
-   * `seed` = 中断那一刻的主会话前缀 + 合成收尾（`buildForkSeed`）。
+   * `seed` = 中断那一刻的主会话前缀 + 合成收尾（`buildForkSeed`，在 `markOf()` 里做）。
    * 它 `meta.isSeeded` 且 `inheritedEventCount = boundary + 1`，
    * 形状照 `session-controller/src/commands.ts:266-284`。
    *
@@ -517,9 +331,9 @@ export class InterruptPlan extends Service {
    *
    * @param id - 这次中断的编号。
    * @param parent - 白羽。
-   * @param snapshot - **中断那一刻**取定的 seed 与 boundary（不由本函数重算）。
+   * @param mark - **中断那一刻**取定的坐标与 seed（不由本函数重算）。
    */
-  private async createChild(id: string, parent: Agent, snapshot: Snapshot): Promise<void> {
+  private async createChild(id: string, parent: Agent, mark: SessionMark): Promise<void> {
     const tcb = this.ctx.tcb.get(this.config.plannerTcb)
     if (tcb === undefined) {
       this.ctx.logger.warn(
@@ -530,8 +344,8 @@ export class InterruptPlan extends Service {
 
     const created = await this.ctx.agents.create({
       sessionId: SessionId(`interrupt-plan-${id}`),
-      seed: [...snapshot.seed],
-      inheritedEventCount: SessionLogOffset(snapshot.boundary + 1),
+      seed: [...mark.seed],
+      inheritedEventCount: SessionLogOffset(mark.boundary + 1),
       parentAgent: parent,
       meta: { isSeeded: true, parentSession: parent.session.id },
       ...tcb === undefined ? {} : {

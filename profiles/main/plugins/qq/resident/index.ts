@@ -54,10 +54,11 @@ export const name = 'qq-resident'
  * `pointer` 也在依赖里：白羽一上线就要把注意力焦点钉在她身上
  * （见 `apply` 里那段注释 —— 那是 `interrupt_plan` 的前置条件）。
  *
- * `interruptPlan` 同样：**"上次是停下来的"那条提醒要有人可注入**，
- * 而那一刻只有本插件知道 agent 刚建好。
+ * ⚠️ **`lastShutdown` 不在这张表里** —— 它是个**非必要插件**，所以那一处
+ * 走 `ctx.get('lastShutdown')`（可选服务）。不挂它拿到 `undefined`，
+ * 那行短路，**影响为零**。
  */
-export const inject = ['agents', 'agentLoop', 'agentDefaultModel', 'tcb', 'pointer', 'interruptPlan']
+export const inject = ['agents', 'agentLoop', 'agentDefaultModel', 'tcb', 'pointer']
 
 /** 配置。 */
 export interface Config {
@@ -158,13 +159,16 @@ export function apply(ctx: Context, config: Config): void {
 
       // ★ 注入"上次是停下来的"（优雅关闭原理）。
       //
-      // 为什么由**这里**调、而不是 `interrupt_plan` 自己激活时注：插件激活时
+      // 为什么由**这里**调、而不是那个插件自己激活时注：插件激活时
       // **还没有 agent 可以注入**（`ctx.agents` 是空的）。这里是"白羽刚上线"
       // 那个唯一时刻。那个插件已经读过存档了，这里只是把提醒交出去。
       //
-      // 它只在**上一次确实是"有事在飞时被停掉"**才有内容（判据在
-      // `recordShutdown` 里），所以闲停 / 崩掉都不会留下它。
-      ctx.interruptPlan.announce(created.agent)
+      // ★ **用 `ctx.get()` 而不是声明式注入** —— `last_shutdown` 是个
+      //   **非必要插件**（默认不挂：它的触发判据在开发期不可靠，见那个插件的说明）。
+      //   可选服务走 `ctx.get`，于是：
+      //     不挂它 → 这里拿到 undefined → 短路 → **影响为零**
+      //     挂上它 → 补丁加一行，读 / 写 / 注入全活
+      ctx.get('lastShutdown')?.announce(created.agent)
 
       // 补打各设施的启动自述（db / tcb / pointer）。
       // 它们跑在挂载早期，那一刻还没有终端出口；本行是补丁层的【最后一行】，

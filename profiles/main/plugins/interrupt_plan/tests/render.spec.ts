@@ -29,7 +29,7 @@
 
 import assert from 'node:assert/strict'
 import {
-  WHAT_LABEL, WHAT_PLACEHOLDER, WRITER_TASK, parseWhat, renderPlan, renderShutdown, writerTaskFor,
+  WHAT_LABEL, WHAT_PLACEHOLDER, WRITER_TASK, parseWhat, renderPlan, writerTaskFor,
 } from '../render.ts'
 
 let passed = 0
@@ -203,29 +203,6 @@ function checkTrue(label: string, actual: boolean): void {
   checkTrue('不满 1 分钟也显示 1 分钟（不写 0）', at(1).includes('还能记 1 分钟'))
   checkTrue('还差 5 小时', at(5 * 3_600_000).includes('还能记 5 小时'))
   checkTrue('23 小时 59 分按小时算', at(24 * 3_600_000 - 60_000).includes('还能记 23 小时'))
-}
-
-// ── renderShutdown：优雅关闭记录（重启后她得知道上一轮是【被停掉】的） ──
-{
-  const text = renderShutdown({
-    sessionId: 'plos-baiyu',
-    turn: 7,
-    seq: 42,
-    at: 1_000_000_000_000,
-    reason: '当时有一条中断还没处理完',
-  })
-  checkTrue('★ 含"上次是停下来的"', text.includes('【上次是停下来的】'))
-  checkTrue('★ 含停止的原因', text.includes('当时有一条中断还没处理完'))
-  checkTrue('★ 含 sessionId 坐标', text.includes('plos-baiyu'))
-  checkTrue('★ 含 turn 坐标', text.includes('第 7 轮'))
-  checkTrue('★ 含 seq 坐标（给 session_event_read 的钥匙）', text.includes('seq=42'))
-  checkTrue('★ 告诉她用哪个工具回看', text.includes('session_event_read'))
-  checkTrue('★ 语气是许可式，不是命令式', text.includes('由你决定'))
-  checkTrue('★ 明说可以不管它', text.includes('忽略这条就行'))
-  checkTrue(
-    '★ 不含未替换的占位符',
-    !text.includes('${') && !text.includes('undefined') && !text.includes('NaN'),
-  )
 }
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

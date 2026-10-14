@@ -527,7 +527,19 @@ export class InterruptPlan extends Service {
 
       // ★ `what` 来自快照 subagent；`why` **直接用中断那一刻的原话**。
       //   不绕模型一圈 —— 理由见 `render.ts` 的 `WRITER_TASK`。
-      const what = parseWhat(this.lastAssistantText(child))
+      const text = this.lastAssistantText(child)
+      // ★ **空文本必须响。**
+      //
+      //   否则这条路失败时**一点声音都没有**：库里只留下一句 `WHAT_PLACEHOLDER`
+      //   （"（没有写清楚…）"），把"**planner 压根没开轮**"伪装成"planner 写得含糊"。
+      //   实测踩过一次：子会话里**只有 `session` 头**、日志无任何告警，
+      //   而那句占位让人（我）先误判成"输出没匹配上格式"。
+      if (text.trim() === '') {
+        this.ctx.logger.warn(
+          `interrupt-plan: 快照 subagent 没产出任何文本（${id}）—— 待办会写成占位`,
+        )
+      }
+      const what = parseWhat(text)
       const now = Date.now()
 
       // 落定之前先清一遍过期的 —— 别把一条已经没意义的待办端上去。

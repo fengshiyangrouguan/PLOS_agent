@@ -62,8 +62,13 @@ PLOS_agent/                              ← 本仓库 = $DSH_HOME
 ├── cordis.patch.yml                     # home 层：对该 home 下所有 profile 生效
 ├── scripts/                             # 开发工具
 │   ├── dev.ps1                          #  启动 + 日志落盘
-│   └── check.ps1                        #  类型 + 装配树 快检
+│   └── check.ps1                        #  类型 + 装配树 + 全部自检
 ├── logs/                                # dev.ps1 的日志，已 gitignore
+├── data/                                # ⚠️ 整个目录都在 .gitignore 里（见下）
+│   ├── tcb.json                         #  ★ 身份 + 模型配置（谁是谁、用哪个模型）
+│   ├── identity/                        #  ★ 人设正文
+│   ├── plos.db                          #  数据库（运行时生成）
+│   └── focus.json                       #  当前焦点（运行时生成）
 └── profiles/
     └── main/                            # profile：一个可启动的"应用"
         ├── package.json                 # dsh.profile.bundles + pnpm 成员名
@@ -74,6 +79,12 @@ PLOS_agent/                              ← 本仓库 = $DSH_HOME
         ├── node_modules/                # pnpm 产物，已 gitignore
         └── plugins/                     # ★★ 我们写的插件，一文件一插件
 ```
+
+> ⚠️ **`data/` 整目录被 `.gitignore` 忽略**（那一行的注释写的是"数据库文件"，
+> 但模式是 `data/`）。于是 **`tcb.json`（身份 + 模型配置）和 `identity/`（人设正文）
+> 也不进版本库** —— 新克隆出来的仓库**没有白羽的身份**，
+> 而 `tcb` 插件只会 warn 一句「目录不存在，TCB 不可用」，接着没有模型可用。
+> **这是一个待定的边界**（配置该不该入库），见 `PLOS/docs/m6.md`。
 
 ### profile 有两个"名字"，别混
 
@@ -169,27 +180,27 @@ export function apply(ctx: Context) {
 ### 3. 验证（三层，从便宜到贵）
 
 ```powershell
-# ① 类型 + 装配树 —— 秒级，不挂载、不需要 API key
+# ① 类型 + 装配树 + 全部自检 —— 秒级，不挂载、不需要 API key
 .\scripts\check.ps1
 ```
 
-它会跑 `tsc -p profiles/main/tsconfig.json`，然后 `--dump-config` 并摘出
-「由我们补丁层贡献/修改」的行。**新插件没出现在这个列表里 = 没挂上**，先查 `id`/路径。
+它跑三件事：`tsc -p profiles/main/tsconfig.json`、`--dump-config` 并摘出
+「由我们补丁层贡献/修改」的行、以及 `plugins/**/*.spec.ts` 全部自检脚本。
+**新插件没出现在那个列表里 = 没挂上**，先查 `id`/路径。
 
 ```powershell
 # ② 真启动（挂载整棵树，看插件有没有激活）
 .\scripts\dev.ps1
 ```
 
-日志里看两件事：插件自己打的日志，以及末尾的 `dsh: warning: N entries did not activate`。
+日志里看两件事：插件自己打的日志，以及 `dsh: warning: N entries did not activate`。
 
-```powershell
-# ③ 让模型真的调用你的工具 —— 需要一个 app bundle + API key
-.\scripts\dev.ps1 -- --profile headless "试一下 plos_ping"
-```
+**③ 让模型真的跑一轮** —— 需要 app bundle + API key。
 
-（目前 `dsh.profile.bundles` 只装了 `@deepseek-ai/dsh-base`，没有 app 层，
-所以进程挂载完就常驻。要跑任务就加 `@deepseek-ai/dsh-headless`。）
+`dsh.profile.bundles` 装的是 `@deepseek-ai/dsh-base` + `dsh-logbook`，**没有 app 层**，
+所以进程挂载完就常驻：`profile main` 的活是 QQ 常驻会话 + 感知定时器，
+由协议端推消息驱动，**不是命令行跑任务**。要跑一次性任务得另加 app bundle
+（如 `@deepseek-ai/dsh-headless`）。
 
 #### 插件没激活时怎么查
 
@@ -226,16 +237,17 @@ pnpm dsh --profile main
 **① 控制台 / 日志文件。** `scripts/dev.ps1` 会把 stdout+stderr 同时 tee 到
 `logs/<时间戳>-<profile>.log`（该目录已 gitignore）。**排查时认文件，滚动条会丢东西。**
 
-日志级别在补丁层里配（`cordis-plugin-logger-console` 那行），
-`0=ERROR 1=INFO 2=WARN 3=DEBUG`：
+日志出口是 **`dsh-logbook`**（补丁层 `- id: logs`），**不是 cordis 自带的
+`logger-console`** —— 原因见下面「坑 2」。它的语义是"**某级及更严重**"：
+`error → warn → info → debug`，所以 `default: info` 表示 info 及更严重。
 
 ```yaml
-- id: logger-console
-  name: '@deepseek-ai/cordis-plugin-logger-console'
-  config:
-    levels:
-      default: 1              # 想看更细就调到 3
-      my-plugin: 3            # 也可以只给某个 logger 调
+# profiles/main/cordis.patch.yml 的 `- id: logs`
+stderr:
+  enabled: true
+  types:
+    default: info
+    qq-adapter: debug       # 也可以只给某个 logger 调
 ```
 
 **② `--dump-config` 看装配树**，不挂载、不需要 key，是"某一行到底在不在树里"的权威答案。
@@ -320,15 +332,28 @@ cd E:\project\PLOS\deepseek-harness
 node --import tsx/esm -e "import('file:///E:/project/PLOS/PLOS_agent/profiles/main/plugins/hello.ts').catch(e=>console.error(e.message))"
 ```
 
-### 2. console logger exporter 不在 `dsh-base` 里
+### 2. logger 的 exporter 是独立插件，而**我们用的是 logbook 不是 console**
 
-`logger` 是 cordis 核心服务，但它的 **exporter 是独立插件**
-（`@deepseek-ai/cordis-plugin-logger-console`）。base bundle 里没有任何 logger 行，
-不装则 `ctx.logger.*` 的输出**没有去处，静默丢弃**。本仓库的补丁层已 insert 该行。
+`logger` 是 cordis 核心服务，但它的 **exporter 是独立插件**。base bundle 里没有
+logger 行，不装则 `ctx.logger.*` 的输出**没有去处，静默丢弃**。
 
-附带一个时序坑：**无 `inject` 的插件在装载瞬间就激活，可能早于 exporter 挂上**，
-此时发出的日志被丢弃（同一个补丁层内的行序不代表激活序）。所以最早期的自检
-用 `console.log` 直接写 stdout——见 `plugins/hello.ts`。
+本仓库用的是 **`dsh-logbook`**（补丁层 `- id: logs`），**换掉了 cordis 自带的
+`@deepseek-ai/cordis-plugin-logger-console`**，两个原因：
+
+1. **cordis 的数值级别是反的**（`error=0 info=1 warn=2 debug=3`，过滤是
+   `if (targetLevel < level) continue`）—— 于是 `default: 1` 会**静默吞掉所有
+   warn 和 debug**。我们在 `attention` / `qq-signals` 里写的 warn 一直没出来。
+2. 它的 **exporter disposer 有上游 bug**（摘掉的是最近注册的那个而不是自己的），
+   所以**任何插件重载都可能摘掉别的插件的日志出口** —— 而我们开着 HMR，
+   这很可能就是 `db` / `tcb` / `pointer` 的启动日志消失的机制。
+
+⚠️ 还有一条上游 bug 仍在：**内置 buffer 收不到 warn/debug**。
+logbook 自己注册全捕获出口 + 从 buffer 补种，所以绕过它。
+
+**时序坑**（换 exporter 也解决不了）：**无 `inject` 的插件在装载瞬间就激活，
+可能早于 exporter 挂上**，此时发出的日志被丢弃（同一个补丁层内的行序不代表激活序）。
+所以早期的启动自述走 `plugins/_startup-log.ts` 的 `recordStartupLine()`，
+由补丁层最后一行（`qq/resident`）补打出来。
 
 ### 3. `typert-loader` 需要构建产物
 
@@ -362,6 +387,7 @@ npx tsdown --config-loader native --env.DSH_BUILD_FACE host
 | `profiles/*/cordis.yml` | ❌ | DSH 每次启动重写 |
 | `profiles/*/node_modules/` | ❌ | pnpm 产物 |
 | `logs/` | ❌ | 运行日志 |
+| `data/` | ❌ | ⚠️ **整目录被忽略** —— 里面既有运行时数据（`plos.db` / `focus.json`），也有**配置**（`tcb.json` / `identity/`）。见上 |
 | `storages/`、`.anonymous-user-id`、`sessions/`、`attachments/` | ❌ | $DSH_HOME 运行时数据 |
 | `../deepseek-harness/` | ❌ | 上游，带自己的 `.git`，用 `git fetch && git checkout <SHA>` 升级 |
 

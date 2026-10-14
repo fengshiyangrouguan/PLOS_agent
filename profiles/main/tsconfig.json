@@ -43,7 +43,9 @@
       "@deepseek-ai/dsh-llm": ["../../../deepseek-harness/packages/llm/llm"],
       "@deepseek-ai/dsh-user-approval": ["../../../deepseek-harness/packages/interaction/user-approval"],
       "@deepseek-ai/dsh-brand": ["../../../deepseek-harness/packages/util/brand"],
-      "@deepseek-ai/dsh-home-paths": ["../../../deepseek-harness/packages/util/home-paths"]
+      "@deepseek-ai/dsh-home-paths": ["../../../deepseek-harness/packages/util/home-paths"],
+      "@deepseek-ai/dsh-util-values": ["../../../deepseek-harness/packages/util/values"],
+      "@deepseek-ai/dsh-attachment": ["../../../deepseek-harness/packages/attachment/attachment"]
     }
   },
   "include": ["plugins/**/*.ts"]

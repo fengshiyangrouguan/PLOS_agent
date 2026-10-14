@@ -149,6 +149,31 @@ export const MIGRATIONS: readonly Migration[] = [
         )
       `)
       db.exec('CREATE INDEX IF NOT EXISTS idx_interrupt_plan_state ON interrupt_plan (state, expires_at)')
+
+      // ── 图片描述缓存 ──────────────────────────────────────────────
+      // `vlm2text` 的描述缓存：**同一张图只描述一次**。
+      //
+      // ★ 键是【图片原始字节的 sha256】，**不是** attachment 的 id：
+      //   attachment 服务会规范化（缩放 / 重编码），所以它的摘要算的是
+      //   **规范化之后**的字节 —— 那不能用来回答"QQ 发的是不是同一张图"。
+      //   这里自己按原始字节算，与规范化无关。
+      //
+      // ★ `provider` / `model` 一起存：换了 VLM 之后，旧描述仍然可用，
+      //   但排障时要能看出"这条是谁写的"。所以它是**记录**，不是缓存键的一部分
+      //   （进键会让换模型等于全部失效，而那没有必要）。
+      //
+      // ★ **失败不写行** —— 这是刻意的：写一行"描述失败"就等于把一次
+      //   瞬时故障固化下来，那张图此后永远没描述。不写 ⇒ 下次遇到同一张图
+      //   **自动重试**。所以这张表里只会有成功的描述。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS image_descriptions (
+          hash       TEXT    PRIMARY KEY,
+          text       TEXT    NOT NULL,
+          provider   TEXT    NOT NULL,
+          model      TEXT    NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `)
     },
   },
 ]

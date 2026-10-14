@@ -468,7 +468,8 @@ export class QqAdapter extends Service {
     }
     // 入缓冲，再广播。顺序要紧：监听器里读缓冲时必须已经能看到这一条。
     this.buffer.push(incoming)
-    // debug 级：开发时用来看"消息到底进没进来"。级别在补丁层的 logger-console 里调。
+    // debug 级：开发时用来看"消息到底进没进来"。级别在补丁层的 `- id: logs`
+    // （dsh-logbook）的 `stderr.types` 里调，不是 cordis 自带的 logger-console。
     this.log('debug', `收到${isGroup ? `群 ${groupId ?? '?'}` : `私聊 ${userId}`}消息`
       + `（${segments.length} 段，msg_id=${incoming.messageId}`
       + `${mentionsSelf ? '，@了我' : ''}）`)
@@ -741,9 +742,12 @@ export class QqAdapter extends Service {
   /**
    * 构造解析上下文。
    *
-   * VLM 描述器**目前不接**（`describe` 留空）：它需要 `ctx.llm`，而把"适配器"和
-   * "模型调用"绑在一起会让这条 seam 变成环。等 persona 层落地时，由那一侧实现
-   * `ImageDescriber` 并通过 `qq` 服务的可选钩子注入。
+   * VLM 描述器由**外部注入**（{@link setImageDescriber}），**适配器自己不实现它**：
+   * 实现它需要模型调用，而把"适配器"和"模型"绑在一起会让这条 seam 变成环。
+   *
+   * 现在的注入方是 `qq/vlm` —— 它把**领域无关**的 `ctx.vlm2text` 接上来。
+   * 没挂那个插件时 `describe` 留空，图片段仍会被解析，只是 `description` 为空
+   * （渲染成 `[图片]`）。
    */
   private resolveContext(): ResolveContext {
     return {

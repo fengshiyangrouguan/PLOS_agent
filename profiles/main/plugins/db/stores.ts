@@ -1,5 +1,5 @@
 /**
- * 数据存储层：完整消息、感知历史、待办。
+ * 数据存储层：完整消息、感知历史、待办、图片描述缓存。
  *
  * ## 为什么单独一层
  *
@@ -458,6 +458,23 @@ export class InterruptPlanStore {
   /**
    * 落定一条。
    *
+   * ## ⚠️ 这个方法是**没有生产调用方**的（别以为它在跑）
+   *
+   * 全仓唯一的调用点是 `tests/db.spec.ts`。生产路径只写两种状态：
+   *
+   * | 谁 | 写下什么 |
+   * |:--|:--|
+   * | `insert()` | `surfaced`（一写出来就是它 —— 写待办和浮进上下文是同一刻） |
+   * | `expire()` | `dropped`（TTL 到期，**批量 UPDATE**，不走这个方法） |
+   *
+   * **于是 `'done'` 目前是不可达的** —— 没有"她真的把这件事做了"这个信号，
+   * 而**故意不去猜**：靠启发式（比如"她回话了就算做了"）会给表里写入
+   * 看起来确定、实际是猜的状态，比空着更糟。
+   *
+   * 留着它的理由：`'done'` 是这条生命周期的一部分（`InterruptPlanState`
+   * 的三态），而这是**唯一**能写下它的方法。真接上"她处理掉了"这个信号时
+   * （那需要一个新的可观测判据），调用点在这里。
+   *
    * @param id - 待办 id。
    * @param state - `done`（处理掉了）或 `dropped`（那件事已经过去）。
    * @param now - 现在（毫秒）。
@@ -489,6 +506,94 @@ export class InterruptPlanStore {
     const row = this.#db.prepare(
       'SELECT COUNT(*) AS n FROM interrupt_plan WHERE settled_at IS NULL',
     ).get() as { n: number }
+    return row.n
+  }
+}
+
+/** 一条图片描述。 */
+export interface ImageDescriptionRow {
+  /** 图片**原始字节**的 sha256（十六进制）。 */
+  readonly hash: string
+  /** 描述文本。 */
+  readonly text: string
+  /** 写出这条描述的 VLM provider（排障用，**不参与查键**）。 */
+  readonly provider: string
+  /** 写出这条描述的 VLM 模型。 */
+  readonly model: string
+  /** 落库时刻（毫秒）。 */
+  readonly createdAt: number
+}
+
+/** 数据库里的行形状（snake_case）。 */
+interface ImageDescriptionDbRow {
+  hash: string
+  text: string
+  provider: string
+  model: string
+  created_at: number
+}
+
+/** 把数据库行转成领域形状。 */
+function toImageDescription(row: ImageDescriptionDbRow): ImageDescriptionRow {
+  return {
+    hash: row.hash,
+    text: row.text,
+    provider: row.provider,
+    model: row.model,
+    createdAt: row.created_at,
+  }
+}
+
+/**
+ * 图片描述缓存。
+ *
+ * **只存成功的描述**（见 `schema.ts` 里那张表的说明）：失败不写行，
+ * 于是同一张图下次会自动重试。这是"**一次瞬时故障不该把一张图永久变成
+ * `[图片]`**"的落地方式。
+ *
+ * 键是**原始字节**的哈希，由调用方（`vlm2text`）算好传进来 ——
+ * 这一层不认识 VLM，也不知道字节从哪来。
+ */
+export class ImageDescriptionStore {
+  readonly #db: DatabaseSync
+
+  /** @param db - 已迁移到最新版的数据库句柄。 */
+  constructor(db: DatabaseSync) {
+    this.#db = db
+  }
+
+  /**
+   * 查一条描述。
+   * @param hash - 图片原始字节的 sha256（十六进制）。
+   * @returns 描述；没有时 `undefined`。
+   */
+  get(hash: string): ImageDescriptionRow | undefined {
+    const row = this.#db.prepare('SELECT * FROM image_descriptions WHERE hash = ?').get(hash) as
+      | ImageDescriptionDbRow
+      | undefined
+    return row === undefined ? undefined : toImageDescription(row)
+  }
+
+  /**
+   * 写一条描述。同 `hash` 重复时**覆盖** —— 它描述的本来就是同一张图，
+   * 以最后一次成功的描述为准。
+   * @param row - 描述。
+   */
+  put(row: ImageDescriptionRow): void {
+    this.#db.prepare(`
+      INSERT INTO image_descriptions (hash, text, provider, model, created_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (hash) DO UPDATE SET
+        text       = excluded.text,
+        provider   = excluded.provider,
+        model      = excluded.model,
+        created_at = excluded.created_at
+    `).run(row.hash, row.text, row.provider, row.model, row.createdAt)
+  }
+
+  /** 缓存里有多少条（诊断用）。 */
+  count(): number {
+    const row = this.#db.prepare('SELECT COUNT(*) AS n FROM image_descriptions').get() as { n: number }
     return row.n
   }
 }

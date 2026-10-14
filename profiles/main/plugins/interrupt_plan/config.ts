@@ -5,7 +5,8 @@
  * 插件里不留硬编码可调项。
  *
  * `T`（超时）在 §20.5 表里标的是**待定**，所以这里的默认值只是**起点值**，
- * 等实测调（§19.5 给 `preemptionTimeoutMs` 的起点也是 60 秒，同一条思路）。
+ * 等实测调（`docs/m5-preemption.md` §19.5 给 `preemptionTimeoutMs` 的起点也是
+ * 60 秒，同一条思路）。
  *
  * @module interrupt_plan/config
  */
@@ -31,16 +32,20 @@ export interface Config {
   /**
    * 用哪个 TCB 起写待办的快照 subagent。
    *
-   * §12.2 定案"**任务总结用小模型**单独产生一个 TCB 一个配置"，所以这是一个
-   * **可切换的名字**，换小模型只改 `data/tcb.json`（或这里）。
+   * `docs/m5-preemption.md` §12.2 定案"**任务总结用小模型**单独产生一个 TCB
+   * 一个配置"，所以这是一个**可切换的名字**，换小模型只改 `data/tcb.json`
+   * （或这里）。
    */
   plannerTcb: string
   /**
    * TTL 清扫周期（毫秒）。
    *
-   * 过期本身**不影响正确性**：`list()` 只列 `settled_at IS NULL` 的行，而
-   * `renderPlan` 之前会先 `expire()`。清扫只是让库里的 `state` 早点如实
-   * —— 排障时直接看表不会被一堆死行干扰。
+   * 过期本身**不影响正确性**：`list()` 只列 `settled_at IS NULL` 的行，
+   * 而 `fire()` 在**写一条新待办之前**会先 `expire()` 一遍（`index.ts:444`）——
+   * 那是"别把一条已经没意义的待办端上去"。
+   *
+   * 这里的定时清扫只是让库里的 `state` **早点如实** ——
+   * 排障时直接看表，不会被一堆早就过期的死行干扰。
    */
   sweepIntervalMs: number
 }

@@ -4,7 +4,8 @@
  * ## 它是什么 / 不是什么
  *
  * **是**：一个**领域无关**的持久化设施。它 `provide('db')`，对上层暴露 `this.ctx.db`，
- * 提供三样存储：完整消息存档（搜索工具的数据源）、感知历史、**待办**。
+ * 提供四样存储：完整消息存档（搜索工具的数据源）、感知历史、**待办**、
+ * **图片描述缓存**（`vlm2text` 的"同一张图只描述一次"）。
  * （"当前注意力焦点"已迁到 `ctx.pointer` —— 它要人能直接改，所以落在 `data/` 的文件里。）
  *
  * **不是**：它**不认识 QQ，也不认识任何领域**。表结构是通用的
@@ -47,7 +48,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { migrate } from './schema.ts'
-import { InterruptPlanStore, MessageStore, PerceptionStore } from './stores.ts'
+import { ImageDescriptionStore, InterruptPlanStore, MessageStore, PerceptionStore } from './stores.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -75,8 +76,16 @@ export class Db extends Service {
   readonly interruptPlans: InterruptPlanStore
 
   /**
+   * 图片描述缓存 —— `vlm2text` 的"同一张图只描述一次"。
+   *
+   * 键是图片**原始字节**的 sha256（由调用方算），值是描述文本。
+   * **失败不写行** ⇒ 同一张图下次自动重试。
+   */
+  readonly imageDescriptions: ImageDescriptionStore
+
+  /**
    * 原始句柄。给需要写自定义查询的领域用（比如将来的记忆 / 媒体表）。
-   * 大部分调用方应该用上面三个 store。
+   * 大部分调用方应该用上面四个 store。
    */
   readonly handle: DatabaseSync
 
@@ -102,6 +111,7 @@ export class Db extends Service {
     this.messages = new MessageStore(handle)
     this.perception = new PerceptionStore(handle)
     this.interruptPlans = new InterruptPlanStore(handle)
+    this.imageDescriptions = new ImageDescriptionStore(handle)
   }
 
   /**

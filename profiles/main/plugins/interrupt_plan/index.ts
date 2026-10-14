@@ -326,7 +326,8 @@ export class InterruptPlan extends Service {
    * 它 `meta.isSeeded` 且 `inheritedEventCount = boundary + 1`，
    * 形状照 `session-controller/src/commands.ts:266-284`。
    *
-   * **模型走 planner TCB**（§12.2"任务总结用小模型单独产生一个 TCB 一个配置"）。
+   * **模型走 planner TCB**（`docs/m5-preemption.md` §12.2"任务总结用小模型单独产生
+   * 一个 TCB 一个配置"）。
    * TCB 的段落白名单只留最小一份，**不给 identity** —— 它是工具，不是白羽。
    *
    * @param id - 这次中断的编号。

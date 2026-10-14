@@ -40,6 +40,47 @@
     provider: deepseek-official
     model: deepseek-flash
 
+# SiliconFlow（OpenAI 兼容）—— **主模型与 VLM 都走这一条路线**。
+#
+# ★ 这里只写 `config`，**不加插件行**：`llm-pi-ai` 本来就在 base 层挂着
+#   （装配树里 `- id: llm-pi-ai` / `@deepseek-ai/dsh-llm-pi-ai`），
+#   按 id 覆盖它的字段即可 —— 形状跟上面 `agent-default-model`、下面 `logs` 一样。
+#
+# ★ `providers` 是**整块替换**（补丁层对 config 不做深合并），所以这一路要写完整。
+#
+# 为什么选 SiliconFlow：一条 baseURL 同时给出**主模型**（纯文本）和 **VLM**（收图），
+# 而 `vlm2text` 需要的正是"能收图的那一个"。DeepSeek 官方那条路（`llm-deepseek`）
+# 只有文本模型，所以图像必须另找一家。
+#
+# ★ **模态只在这里声明一次**（`models[].input`）。`data/tcb.json` 的 `ModelConfig`
+#   刻意**不带** `inputModalities` —— 两处各写一遍必然会分叉，而 llm 侧的
+#   provider catalog 才是唯一真相（`ctx.llm.resolveModelInfo()` 读的就是它）。
+#
+# key 值在 $DSH_HOME/.env（已被 .gitignore 忽略），这里只写**环境变量名**，
+# 由 `credentials` 的 credential-ref 机制解析。
+- id: llm-pi-ai
+  config:
+    providers:
+      siliconflow:
+        apiKeyEnv: SILICONFLOW_API_KEY
+        displayName: SiliconFlow
+        # 三个合法值之一（llm-pi-ai/src/provider.ts 的 supportedProtocols）：
+        # openai-completions / openai-responses / anthropic-messages。
+        # SiliconFlow 是 OpenAI 兼容，所以选第一个。
+        api: openai-completions
+        baseURL: https://api.siliconflow.cn/v1
+        models:
+          # 主模型：纯文本。`input` 不写 ⇒ 用 provider 的 defaultInput（['text']）。
+          - id: deepseek-ai/DeepSeek-V3.2
+            name: DeepSeek-V3.2
+            maxTokens: 8192
+          # VLM：★ 全仓唯一声明"这个模型收图"的地方。
+          # `contextWindow` 不写 ⇒ 用 defaultContextWindow。
+          - id: Qwen/Qwen3-VL-32B-Instruct
+            name: Qwen3-VL-32B
+            maxTokens: 2048
+            input: ['text', 'image']
+
 # 请求扩展插件：已恢复启用。曾经的 REQUEST_EXTENSION 已真正修好（见下）。
 #
 # 真正的元凶是 logger-console 那一行的**裸包名解析失败**：
@@ -134,6 +175,28 @@
       name: './plugins/tcb/index.ts'
       config:
         path: !!js "process.env.DSH_HOME + '/data/tcb.json'"
+    # 图片 → 一句话：**领域无关**的服务（不认识 QQ），provide('vlm2text')。
+    #
+    # ★ 它**不挂在任何 agent 瀑布上**，因为 `agent/request` 改不了消息
+    #   （`LlmCallConfig` 没有 messages 字段），而且"请求是 session log 的纯函数"
+    #   —— 描述要调外部 VLM、是非确定性的，只能在**源头**就写进消息正文。
+    #   完整理由写在 plugins/vlm2text/index.ts 的模块注释里。
+    #
+    # ★ 谁消费它：`qq/vlm`（把 QQ 适配器的图片描述钩子接上来）。
+    #   别把 QQ 写进 vlm2text —— 那会把领域无关性弄没。
+    #
+    # inject ['llm','db','tcb','attachments']：
+    #   llm 调 VLM；db 存描述缓存（同一张图只描述一次）；tcb 拿 VLM 的模型；
+    #   attachments 把字节变成耐久附件 —— 图片进请求**只能是附件引用**
+    #   （`ImageBlock.attachment` 是 `ImageAttachmentRef`，不是 base64）。
+    #   所以它必须排在 db / tcb 之后。
+    #
+    # 两项配置都有默认值（vlmTcb='vlm'、一句描述提示词），想改再取消注释。
+    - id: vlm2text
+      name: './plugins/vlm2text/index.ts'
+      config:
+        # vlmTcb: vlm
+        # prompt: 用一句话描述这张图片的内容。……
     # 当前注意力焦点：**白羽现在在哪个会话上**。**领域无关**。
     #
     # 它**曾经**是"抢占式嵌套的栈"，那个模型已被"注意力转移"取代
@@ -209,6 +272,19 @@
     - id: qq-tools
       name: './plugins/qq/tools/index.ts'
 
+    # ③ 桥接：把领域无关的 `vlm2text` 接到 `qq` 适配器的图片描述钩子上。
+    #
+    # `qq/adapter` **刻意不认识模型**（`:744` 就是为这个留空的），它只留了
+    # `setImageDescriber` 这个注入点；`vlm2text` 又**刻意不认识 QQ**。
+    # 两个方向相反的 seam 必须有人对上 —— 放在 QQ 这一侧，因为**谁认识 qq 谁接线**。
+    #
+    # inject ['qq','vlm2text']，两者都就绪后才激活。
+    #
+    # ★ 必须排在 qq-signals **之前**：qq-signals 会 render 消息
+    #   （`ctx.qq.render`），而 render 正是用这个钩子的地方。
+    - id: qq-vlm
+      name: './plugins/qq/vlm/index.ts'
+
     # 领域 → 感知：注册信号源 + 消息存档。
     #
     # 取代旧的"推内容"：领域只暴露**结构化状态**，由感知层统一渲染。
@@ -225,13 +301,12 @@
     #   → 本插件订阅条目并【分配注意力】。所以这里不叫"信号"（那是注册侧的词），
     #   也不叫"push"（它并不在推）。
     #
-    # TODO（docs/design.md §四、§七）—— 现在的实现有四个问题，M2 重写：
-    #   1. ctx.on('qq/message') —— 订阅的是【QQ 领域的原始事件】，绕过了感知层，
-    #      所以天生只能服务 QQ，新闻/手表/手机推的全收不到
-    #   2. 领域自己渲染消息正文 —— 该由感知层统一渲染（不含内容）
-    #   3. 正文里硬塞行为指令 —— 违反已定纪律「工具返回永不混指令」
-    #   4. ctx.qq.drain() 是【读即已读】—— 与"点进去才算已读"矛盾，
-    #      会污染读语义，M3 之前必须修
+    # 它订阅的是**感知条目**（不是 `qq/message` 原始事件）：渲染归感知层、
+    # 返回里不带行为指令、也不推进读游标。这四条是 M3 重写时定下的，
+    # 也正是它能服务 QQ 之外领域（新闻 / 手表 / 手机推送）的前提。
+    #
+    # 职责一句话：**订阅感知条目 → 分配注意力**
+    # （`deliver` / `queue` / `steer` / `cancel`，见 docs/m5-preemption.md §20）。
     - id: attention
       name: './plugins/attention/index.ts'
       config:

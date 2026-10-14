@@ -18,6 +18,8 @@
  *    命中靠得近时区间重合，**必须合并**，否则同一段消息返回两遍
  * 3. **待办的生命周期**：`list()` 默认只列**还没落定**的；已落定的**不会被
  *    `settle` 改第二次**；`expire` 只丢过期的
+ * 4. **图片描述缓存**：同一张图（同一个 hash）重复写是**覆盖**；键里**不含**
+ *    模型 —— 换 VLM 不该让全部缓存失效
  *
  * @module db/spec
  */
@@ -25,7 +27,7 @@
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { LATEST_VERSION, currentVersion, migrate } from '../schema.ts'
-import { DEFAULT_CONTEXT, InterruptPlanStore, MessageStore, PerceptionStore } from '../stores.ts'
+import { DEFAULT_CONTEXT, ImageDescriptionStore, InterruptPlanStore, MessageStore, PerceptionStore } from '../stores.ts'
 
 let passed = 0
 let failed = 0
@@ -127,7 +129,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   const names = (db.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
   ).all() as { name: string }[]).map(row => row.name)
-  check('四张表都在', names, ['events', 'interrupt_plan', 'messages', 'perception_history'])
+  check('五张表都在', names, ['events', 'image_descriptions', 'interrupt_plan', 'messages', 'perception_history'])
 
   // events 照搬 Shiraha：两条外键降级为普通列（不能有 FOREIGN KEY 约束）。
   const ddl = (db.prepare(
@@ -267,6 +269,31 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   check('到期后 expire 丢掉它', store.expire(2000 + ttl), 1)
   check('丢掉的状态是 dropped', store.list('dropped').map(r => r.id), [second])
   check('丢掉后未落定为零', store.openCount(), 0)
+  db.close()
+}
+
+// ── 图片描述缓存 ────────────────────────────────────────────────────
+{
+  const db = freshDb()
+  const store = new ImageDescriptionStore(db)
+  check('空缓存查不到', store.get('abc'), undefined)
+
+  store.put({ hash: 'abc', text: '一只橘猫趴在键盘上', provider: 'siliconflow', model: 'qwen3-vl', createdAt: 1000 })
+  check('写进去了', store.get('abc')?.text, '一只橘猫趴在键盘上')
+  check('缓存计数', store.count(), 1)
+  check(
+    '★ 记下了是谁写的（换 VLM 之后排障要看这个，但它不参与查键）',
+    [store.get('abc')?.provider, store.get('abc')?.model],
+    ['siliconflow', 'qwen3-vl'],
+  )
+
+  store.put({ hash: 'abc', text: '一只猫', provider: 'siliconflow', model: 'qwen3-vl', createdAt: 2000 })
+  check('同一张图重复写是覆盖', store.get('abc')?.text, '一只猫')
+  check('覆盖不新增行', store.count(), 1)
+  check('换模型后旧描述仍查得到（键不含模型）', store.get('abc')?.createdAt, 2000)
+
+  store.put({ hash: 'def', text: '一只狗', provider: 'siliconflow', model: 'qwen3-vl', createdAt: 3000 })
+  check('另一张图是另一行', store.count(), 2)
   db.close()
 }
 

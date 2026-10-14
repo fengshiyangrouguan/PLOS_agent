@@ -22,7 +22,11 @@
  * - `priority: 0` → 最多一条，新的顶掉旧的
  *
  * 注意这里只做**排序**，不做"要不要叫醒她"的决定 —— 那是调用方的事。
- * 抢占（fork / resume / 合并）也不在这里，见 M5。
+ * 打断的判定（`deliver` / `queue` / `steer` / `cancel`）也不在这里，
+ * 见 `preempt.ts` 与 `docs/m5-preemption.md` §20。
+ *
+ * （这里曾写"抢占（fork / resume / 合并）见 M5" —— **那些概念已经不存在了**：
+ * M5 定案的是**注意力转移**，一个主 agent、一个会话，不 fork、不合并。）
  *
  * @module attention/queue
  */

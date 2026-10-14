@@ -58,6 +58,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { QqIncoming } from '../adapter/index.ts'
 import { conversationOf, parseConversation } from '../adapter/buffer.ts'
+import { offer } from '../wait.ts'
 import type { Signal } from '../../perception/types.ts'
 
 /** 插件名。 */
@@ -240,6 +241,14 @@ export function apply(ctx: Context): void {
         error instanceof Error ? error.message : String(error),
       )
     })
+    // ★ **有人在这个会话上等待 ⇒ 消息交给它，不产生唤醒**（短路）。
+    //
+    //   这是 Tulpa 式等待工具的机制面：她在等 A 的下一条消息时，
+    //   A 的消息**不该**再去触发一次唤醒（那会把等待变成一个重复唤醒源），
+    //   而是直接回传给那个工具 —— **由它负责已读**（`drain`）。见 `../wait.ts`。
+    //
+    //   别的会话不受影响（`isWaiting` 只看那一个会话）。
+    if (offer(conversationOf(incoming))) return
     // 冲她来的消息**当场叫醒感知层**去拉一次；普通群消息（0 级）不叫，只搭便车。
     if (wakes(incoming)) wake()
   })

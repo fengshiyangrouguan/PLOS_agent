@@ -28,7 +28,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import z from '@deepseek-ai/schemastery'
 import { displayNameOf } from '../protocol/index.ts'
+import { beginWait } from '../wait.ts'
 import { QqActionError, type QqTarget } from '../adapter/index.ts'
 
 /** 插件名。 */
@@ -36,6 +38,25 @@ export const name = 'qq-tools'
 
 /** 依赖工具注册表与 `qq` 服务。 */
 export const inject = ['tools', 'qq', 'db']
+
+/**
+ * 本插件的配置。
+ *
+ * 只有等待工具的时长 —— 它是**部署可变**的（"她能等多久"是策略，不是常量），
+ * 所以按仓库规矩进 `Config`，不写成常量（`AGENTS.md` §一 记过"把间隔上下限写成常量"那次）。
+ */
+export interface Config {
+  /** 等待工具的**上限**（秒）。用户定案：10 分钟。 */
+  waitMaxSeconds: number
+  /** 不传 `seconds` 时的默认等待（秒）。 */
+  waitDefaultSeconds: number
+}
+
+/** 配置校验。 */
+export const Config: z<Config> = z.object({
+  waitMaxSeconds: z.natural().min(1).default(600),
+  waitDefaultSeconds: z.natural().min(1).default(30),
+})
 
 /**
  * 解析 `target` 参数。
@@ -84,13 +105,14 @@ const REGISTERED_TOOLS = [
   'qq_chats',
   'qq_read',
   'qq_search',
+  'qq_wait_message',
 ] as const
 
 /**
  * 注册所有工具。
  * @param ctx - 本插件的上下文；`tools` 与 `qq` 已由 inject 声明，故此处必已就绪。
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config): void {
   // ── 发文本 ────────────────────────────────────────────────────────
   ctx.tools.register(defineTool({
     name: 'qq_send_message',
@@ -153,6 +175,75 @@ export function apply(ctx: Context): void {
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }
       }
+    },
+  }))
+
+  // ── 等某个会话的下一条消息（Tulpa 式"把话头留着"）─────────────────
+  //
+  // 用途：**对方可能还有话要说，所以先不结束**／**对方还没说完，所以先不接话**。
+  //
+  // ★ 与 Tulpa 那套"固定尾部静默"的区别在**谁决定等多久** —— 那边是服务端拍 N 秒，
+  //   这里是**她自己按情境拍的**。所以它不是"又多了一层时间轴"，而是一个新能力。
+  //   `PLOS/docs/decisions.md` 的「T7 改判」那一段是这条设计的依据。
+  //
+  // 等待期间该会话的**唤醒被短路**（`../wait.ts` ＋ `../signals/index.ts` 里那一段）：
+  // 消息直接回到这里、**不算唤醒信号**，而且**算已读**。别的会话照常唤醒她。
+  ctx.tools.register(defineTool({
+    name: 'qq_wait_message',
+    description: [
+      'Wait for the next message in one conversation, then return it.',
+      'Use it when the other side may still be typing: instead of answering half a thought or',
+      'ending your turn, hold the floor and wait a little.',
+      'While you wait, messages from that conversation come straight back here and count as read;',
+      'they do NOT wake you separately. Other conversations are unaffected.',
+      `Wait at most ${String(config.waitMaxSeconds)} seconds.`,
+      'On timeout it simply reports that nobody spoke — that is not an error.',
+    ].join(' '),
+    parameters: {
+      target: TARGET_PARAM,
+      seconds: {
+        type: 'integer',
+        description: `How long to wait, in seconds. Defaults to ${String(config.waitDefaultSeconds)},`
+          + ` capped at ${String(config.waitMaxSeconds)}.`,
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          spoke: { type: 'boolean' },
+          messages: { type: 'array', items: { type: 'string' } },
+          reason: { type: 'string' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok !== true
+          ? `Wait failed: ${value.reason ?? 'unknown reason'}`
+          : value.spoke === true
+            ? `They spoke:\n${(value.messages ?? []).join('\n')}`
+            : 'Waited, but nobody spoke.',
+      }],
+    },
+    async execute(args) {
+      const target = parseTarget(args.target)
+      if (target === undefined) {
+        return { ok: false, reason: `invalid target "${args.target}", expected "group:<id>" or "private:<id>"` }
+      }
+      // 夹到 `[1, 上限]` —— 夹取而不是拒绝（与其它时长参数一致）。
+      const seconds = Math.min(
+        config.waitMaxSeconds,
+        Math.max(1, Math.trunc(args.seconds ?? config.waitDefaultSeconds)),
+      )
+      const spoke = await beginWait(args.target, seconds * 1000)
+      if (!spoke) return { ok: true, spoke: false }
+      // ★ **回传即已读** —— `drain` 而不是 `peek`；这一步就是"她把这段读掉了"。
+      //   唤醒已被短路（那条消息没产生信号），所以**只有这里会消费它** —— 不会重复交付。
+      const messages: string[] = []
+      for (const item of ctx.qq.drain(args.target)) messages.push(await ctx.qq.render(item))
+      return { ok: true, spoke: true, messages }
     },
   }))
 

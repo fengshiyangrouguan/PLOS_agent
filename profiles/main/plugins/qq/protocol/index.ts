@@ -10,6 +10,8 @@
  * - 消息段：`Segment`
  * - action 名与参数：`ActionMap`
  *
+ * 外加**一个**纯函数 {@link displayNameOf} —— 全仓**唯一**算"这个人的显示名"的地方。
+ *
  * 命名沿用 OneBot 的 snake_case，**不做驼峰转换**——转换层只会让字段对不上号，
  * 出问题时无法和协议文档逐字对照。
  *
@@ -30,6 +32,49 @@ export interface Sender {
   card?: string
   /** 群角色：owner / admin / member。 */
   role?: string
+}
+
+/**
+ * QQ 的**显示名** —— 全仓唯一算它的地方（用户定案）。
+ *
+ * ## 规则
+ *
+ * | 情况 | 渲染 |
+ * |:--|:--|
+ * | 有群名片，且**与 QQ 昵称不同** | `昵称(群昵称:名片)` |
+ * | 群名片与昵称**相同** | `昵称` —— **折叠**。括号存在的意义是区分两个不同的名字，相等时它不携带信息 |
+ * | 没有群名片（私聊，或没设群名片） | `昵称` |
+ * | 没有昵称 | `名片` |
+ * | 两个都没有 | `fallback`（调用方给 `user_id`） |
+ *
+ * ## 「群昵称:」是**字面**渲染的
+ *
+ * 群名片与 QQ 昵称是两个概念，不标出来**模型只能猜括号里的是哪个**。
+ * 代价是多几个字，换"不会认错人"。
+ *
+ * ## 为什么住在这里
+ *
+ * 这是 **QQ 平台的概念**（OneBot 的 `sender.card`）。按分层纪律（`AGENTS.md` §二），
+ * 平台分叉**只许出现在 `qq/adapter` 与 `qq/protocol`**；上层（pipeline / tools）
+ * 只该看到一个"显示名"字符串。收成一个纯函数之后，三处共用同一套规则。
+ *
+ * ★ 在此之前有 **5 处各自算**，逻辑还不一样：adapter 收消息时是 `card ?? nickname`，
+ * 而 `getMessage` / `qq_read_message` / 转发展开那三处**只读 nickname、完全没看 card**
+ * —— 同一个群成员，在实时消息里和在转发里会显示成两个不同的名字。
+ *
+ * @param sender - OneBot 的 `sender`；转发那种松形状也能用（只要有 `nickname` / `card`）。
+ * @param fallback - 两个名字都没有时用什么（调用方给 `user_id`）。
+ * @returns 显示名。
+ */
+export function displayNameOf(
+  sender: { nickname?: string | undefined, card?: string | undefined } | undefined,
+  fallback: string,
+): string {
+  const nickname = sender?.nickname !== undefined && sender.nickname !== '' ? sender.nickname : undefined
+  const card = sender?.card !== undefined && sender.card !== '' ? sender.card : undefined
+  if (nickname === undefined) return card ?? fallback
+  if (card === undefined || card === nickname) return nickname
+  return `${nickname}(群昵称:${card})`
 }
 
 /** 收到的原始事件信封。`post_type` 是判别字段。 */

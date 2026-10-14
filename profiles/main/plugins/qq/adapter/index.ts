@@ -32,6 +32,7 @@ import { resolveMessage } from '../pipeline/segments.ts'
 import type { ImageDescriber, ResolveContext, ResolvedSegment } from '../pipeline/segment.ts'
 import {
   asSegments,
+  displayNameOf,
   echoId,
   type ActionMap,
   type ActionName,
@@ -448,15 +449,12 @@ export class QqAdapter extends Service {
     // @全体与@自己同等对待（实验期语义，`_handle_message_event` 里明确写过）。
     const mentionsSelf = atUserIds.includes('all') || atUserIds.includes(this.selfId)
 
-    const sender = event.sender
-    const card = typeof sender?.card === 'string' && sender.card !== '' ? sender.card : undefined
-    const nickname = typeof sender?.nickname === 'string' && sender.nickname !== '' ? sender.nickname : undefined
-
     const incoming: QqIncoming = {
       messageId: String(event.message_id),
       groupId,
       userId,
-      senderName: card ?? nickname ?? userId,
+      // 显示名收在 `protocol.displayNameOf()` 一处 —— 三处共用同一套规则。
+      senderName: displayNameOf(event.sender, userId),
       time: typeof event.time === 'number' ? event.time : Math.floor(Date.now() / 1000),
       segments,
       mentionsSelf,
@@ -755,9 +753,11 @@ export class QqAdapter extends Service {
         const detail = await this.getMessage(messageId)
         return {
           segments: asSegments(detail.message),
-          senderName: typeof detail.sender?.nickname === 'string' && detail.sender.nickname !== ''
-            ? detail.sender.nickname
-            : undefined,
+          // ★ 这里以前**只读 nickname、没看 card** —— 于是同一个群成员
+          //   在引用/转发里和在实时消息里会显示成两个不同的名字。现在共用同一个函数。
+          senderName: detail.sender === undefined
+            ? undefined
+            : displayNameOf(detail.sender, String(detail.sender.user_id ?? '')),
         }
       },
       fetchImage: (url) => this.downloadImage(url),

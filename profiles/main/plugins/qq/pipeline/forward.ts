@@ -25,6 +25,7 @@
 
 import { faceToText } from './face.ts'
 import { parseJsonCard } from './card.ts'
+import { displayNameOf } from '../protocol/index.ts'
 import type { Segment } from '../protocol/index.ts'
 import type { ForwardBlock, ForwardSubMessage, ImageDescriber, ResolvedImage, ResolvedSegment } from './segment.ts'
 
@@ -168,19 +169,27 @@ export class ForwardExpander {
     return { senderName, segments, nested }
   }
 
-  /** 从子节点里取发送者显示名。 */
+  /**
+   * 从子节点里取发送者显示名。
+   *
+   * ★ 这里以前**只读 `nickname`、完全没看 `card`** —— 于是同一个群成员
+   * 在转发里和在实时消息里会显示成两个不同的名字。现在共用
+   * `protocol.displayNameOf()`。
+   */
   private senderName(record: Record<string, unknown>): string {
     const sender = record['sender']
-    if (sender !== null && typeof sender === 'object') {
-      const nickname = (sender as { nickname?: unknown }).nickname
-      if (typeof nickname === 'string' && nickname !== '') return nickname
-    }
-    const nickname = record['nickname']
-    if (typeof nickname === 'string' && nickname !== '') return nickname
+    const named = sender !== null && typeof sender === 'object' ? sender as Record<string, unknown> : {}
+    const pick = (value: unknown): string | undefined =>
+      typeof value === 'string' && value !== '' ? value : undefined
     const userId = record['user_id']
-    if (typeof userId === 'string' && userId !== '') return userId
-    if (typeof userId === 'number') return String(userId)
-    return '未知'
+    const fallback = typeof userId === 'number'
+      ? String(userId)
+      : (pick(userId) ?? '未知')
+    return displayNameOf({
+      // `record.nickname` 是旧版就有的回落源（有的协议端把昵称放在子节点顶层）。
+      nickname: pick(named['nickname']) ?? pick(record['nickname']),
+      card: pick(named['card']),
+    }, fallback)
   }
 
   /** 解析转发内的一个段。`undefined` 表示该段不产生内容（例如被 skip 的图片）。 */

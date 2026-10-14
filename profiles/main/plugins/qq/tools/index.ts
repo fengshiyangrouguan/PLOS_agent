@@ -28,6 +28,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { displayNameOf } from '../protocol/index.ts'
 import { QqActionError, type QqTarget } from '../adapter/index.ts'
 
 /** 插件名。 */
@@ -237,7 +238,7 @@ export function apply(ctx: Context): void {
           messageId: args.message_id,
           groupId: undefined,
           userId: String(detail.sender?.user_id ?? ''),
-          senderName: detail.sender?.nickname ?? 'unknown',
+          senderName: displayNameOf(detail.sender, 'unknown'),
           time: Math.floor(Date.now() / 1000),
           segments: Array.isArray(detail.message) ? detail.message : [],
           mentionsSelf: false,
@@ -247,7 +248,7 @@ export function apply(ctx: Context): void {
         })
         return {
           ok: true,
-          ...detail.sender?.nickname === undefined ? {} : { senderName: detail.sender.nickname },
+          senderName: displayNameOf(detail.sender, 'unknown'),
           text,
         }
       } catch (error) {
@@ -300,11 +301,10 @@ export function apply(ctx: Context): void {
         return {
           ok: true,
           members: members.map((member) => {
-            const card = typeof member.card === 'string' && member.card !== '' ? member.card : undefined
-            const nickname = typeof member.nickname === 'string' && member.nickname !== '' ? member.nickname : undefined
             return {
               userId: String(member.user_id),
-              name: card ?? nickname ?? String(member.user_id),
+              // 与实时消息、引用、转发共用同一套显示名规则。
+              name: displayNameOf(member, String(member.user_id)),
               ...typeof member.role === 'string' && member.role !== '' ? { role: member.role } : {},
             }
           }),

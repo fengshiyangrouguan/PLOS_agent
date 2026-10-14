@@ -98,6 +98,12 @@ export function apply(ctx: Context): void {
       'Send a text message to a QQ group or private chat.',
       'Use "group:<id>" or "private:<id>" as the target.',
       'In groups you may mention people with `at` and quote a message with `reply_to`.',
+      // ★ 长度控制（用户定案）—— 放在**工具描述**而不是 `text` 参数描述里：
+      //   它是"怎么说话"的行为准则，不是字段格式。
+      'In shallow, casual chat prefer a short reply — usually 15–30 Chinese characters —'
+      + ' and send several short messages rather than one long block.',
+      'That length does not apply when you are expressing complex feelings, holding a deeper'
+      + ' discussion, or when something simply needs to be said in full.',
     ].join(' '),
     parameters: {
       target: TARGET_PARAM,

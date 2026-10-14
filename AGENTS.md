@@ -81,6 +81,7 @@ adapter/buffer.ts:69    conversationOf()  ← 全仓唯一写 group:/private: �
 | 数据库内容 | 直接 `node -e` 用 `node:sqlite` 查，不猜 |
 | ★ **运行时查别的服务** | **别在 `apply` 里立刻查。** 插件的激活序由**依赖满足**决定，**不是补丁层的行序** —— 在 `apply` 里马上 `ctx.llm.listModels(...)` 会拿到 `no adapter registered for provider "xxx"`，而那只说明**那个插件还没激活**（实测：同一个 provider 等 1.5~3 秒就就绪）。**这个假象和"配置没生效"长得一模一样**，会把人骗去改配置 |
 | ★ **临时运行时探针** | 写一个 `plugins/_probe-xxx.ts` ＋ 临时补丁行：它 `inject` 目标服务，**重试等待**到就绪，把结论 `appendFileSync` 到 `%TEMP%`，然后**用完就删**（连同补丁行）。这是"服务真的跑到了"之外的第二种确认 |
+| ★★ **`systemPrompt.assemble()` 的 scope** | **照 `assembleContextFor()` 的写法传 `{ agent, scope: agent }`** —— `scope` 要的是 **Agent 对象本身**，不是 `agent.scope`（`core/agent/src/dispatch.ts:174-176`）。传错层**不报任何错**，只会静默给出两个假象：① agent 注册的段落全变 **0 字** ② `tcb` 的 `sections` 白名单**看起来没生效**。**我为此误判过一次"人设没进提示词"，差点去改好的 `tcb.apply`** —— 而且"不带 scope"与"传 `agent.scope`"**犯的是同一个错**，拿它们互为对照会得出"两边一致 ⇒ 不是作用域问题"的错误结论。**探针的对照组必须有一组是真的走对的那条路** |
 
 ---
 

@@ -162,6 +162,17 @@ export interface ResolveContext {
    * 需要自己决定子消息解析到哪一层。返回 `undefined` 表示查不到（调用方降级）。
    */
   getMessage: (messageId: string) => Promise<{ segments: import('../protocol/index.ts').Segment[], senderName: string | undefined } | undefined>
+  /**
+   * 取合并转发的内容（`get_forward_msg`）。
+   *
+   * ★ 与 `getMessage` **是两回事**：转发段里那坨 `id` 不是消息号，
+   * 拿它去 `get_msg` 会被协议端拒绝（实测 `retcode 1400`）。
+   * 参数是那坨 token，原样传，**不要 `Number()`**。
+   *
+   * @param token - `forward` 段 `data.id`。
+   * @returns 扁平的子消息数组；查不到返回 `undefined`。
+   */
+  getForward: (token: string) => Promise<readonly import('../protocol/index.ts').ForwardNode[] | undefined>
   /** 下载图片并转 base64；失败返回 undefined。 */
   fetchImage: (url: string) => Promise<{ base64: string, mimeType: string } | undefined>
   /** 查昵称；失败返回 undefined。 */

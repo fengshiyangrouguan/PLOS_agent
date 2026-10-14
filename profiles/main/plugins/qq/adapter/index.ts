@@ -29,6 +29,7 @@ import { Config as ConfigSchema, type Config } from './config.ts'
 import { MessageBuffer } from './buffer.ts'
 import { renderSegments } from '../pipeline/render.ts'
 import { resolveMessage } from '../pipeline/segments.ts'
+import { FrameCapture } from './capture.ts'
 import type { ImageDescriber, ResolveContext, ResolvedSegment } from '../pipeline/segment.ts'
 import {
   asSegments,
@@ -37,6 +38,7 @@ import {
   type ActionMap,
   type ActionName,
   type ActionResponse,
+  type ForwardNode,
   type GroupMember,
   type LoginInfo,
   type MessageEvent,
@@ -170,6 +172,13 @@ interface PendingCall {
   resolve: (response: ActionResponse) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
+  /**
+   * 我们**发出去**的 action 与 params。
+   *
+   * 留着只为采集：回执帧单独看是残缺的 —— 一个 `{status:'failed'}` 不告诉你
+   * 它对应哪个请求。`capture.ts` 把两者成对记下来。
+   */
+  request: { action: string, params: unknown }
 }
 
 // ─────────────────────────────── 适配器 ───────────────────────────────
@@ -208,6 +217,14 @@ export class QqAdapter extends Service {
   private readonly buffer: MessageBuffer
 
   /**
+   * 原始帧采集 —— **实验素材**，`config.capture.enabled` 为真时才存在。
+   *
+   * 挂在帧处理函数的**最前面**（白名单过滤之前），所以"我们丢掉了什么"也留得下。
+   * 见 `capture.ts`。
+   */
+  private readonly capture: FrameCapture | undefined
+
+  /**
    * 可选的图片描述器（VLM）。
    *
    * **适配器自己不实现它**，只提供注入点（`setImageDescriber`）。理由：实现它需要
@@ -235,6 +252,20 @@ export class QqAdapter extends Service {
     this.wsFactory = resolveWebSocket()
     this.reconnectDelay = config.reconnect.initialDelayMs
     this.buffer = new MessageBuffer(config.buffer)
+
+    // 采集是"要素材时才开"的东西。**启用却没给路径**要响，不能静默不生效。
+    if (config.capture.enabled && config.capture.path === '') {
+      ctx.logger.warn('qq-adapter: capture.enabled 为真但 capture.path 是空的 —— 不采集')
+      this.capture = undefined
+    } else if (config.capture.enabled) {
+      this.capture = new FrameCapture({
+        path: config.capture.path,
+        samplesPerKind: config.capture.samplesPerKind,
+      })
+      this.capture.start()
+    } else {
+      this.capture = undefined
+    }
 
     // 连接是资源：创建处返回清理，插件卸载（或依赖变化）时自动断开。
     ctx.effect(() => {
@@ -319,6 +350,8 @@ export class QqAdapter extends Service {
     this.closed = true
     if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer)
     this.stopBeat()
+    // 采集器落最后一次盘并停表 —— 卸载/重连都会走到这里。
+    this.capture?.stop()
     try {
       this.socket?.close(4000, 'adapter disposed')
     } catch {
@@ -339,8 +372,16 @@ export class QqAdapter extends Service {
       return
     }
 
-    // 回执优先：带 echo 的帧是调用响应，不是事件。
+    // ★ 采集点：所有帧的**唯一咽喉**，而且在白名单过滤与任何解析**之前** ——
+    //   所以"我们丢掉了什么"（非白名单群、未处理的 post_type）也留得下。
     const id = echoId(raw.echo)
+    this.capture?.note(
+      id !== undefined ? 'echo' : String(raw.post_type ?? '(无 post_type)'),
+      raw,
+      id === undefined ? undefined : this.pending.get(id)?.request,
+    )
+
+    // 回执优先：带 echo 的帧是调用响应，不是事件。
     if (id !== undefined) {
       this.settle(id, raw as ActionResponse)
       return
@@ -497,7 +538,7 @@ export class QqAdapter extends Service {
         this.pending.delete(echo)
         reject(new QqActionError(`${action} 超时（${this.config.actionTimeoutMs}ms）`, -2))
       }, this.config.actionTimeoutMs)
-      this.pending.set(echo, { resolve, reject, timer })
+      this.pending.set(echo, { resolve, reject, timer, request: { action, params } })
       try {
         socket.send(JSON.stringify({ action, params, echo }))
       } catch (error) {
@@ -611,6 +652,21 @@ export class QqAdapter extends Service {
    */
   async getMessage(messageId: string): Promise<ActionMap['get_msg']['result']> {
     return await this.call('get_msg', { message_id: Number(messageId) })
+  }
+
+  /**
+   * 取合并转发的内容。
+   *
+   * ★ **参数是 `forward` 段 `data.id` 那坨不透明 token，原样传，绝不 `Number()`。**
+   * 与 `getMessage` 是两条不同的路：把 token 丢给 `get_msg` 实测会被回
+   * `retcode 1400 · "message_id: expected a message id"`。
+   *
+   * @param token - `forward` 段的 `id`。
+   * @returns 扁平的子消息数组（见 `ForwardNode`）。
+   */
+  async getForwardMsg(token: string): Promise<ForwardNode[]> {
+    const result = await this.call('get_forward_msg', { message_id: token })
+    return result.messages ?? []
   }
 
   /**
@@ -760,6 +816,7 @@ export class QqAdapter extends Service {
             : displayNameOf(detail.sender, String(detail.sender.user_id ?? '')),
         }
       },
+      getForward: (token) => this.getForwardMsg(token),
       fetchImage: (url) => this.downloadImage(url),
       lookupNickname: (userId) => this.lookupNickname(userId),
       ...this.describe === undefined ? {} : { describe: this.describe },

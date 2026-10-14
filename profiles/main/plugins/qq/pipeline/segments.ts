@@ -138,14 +138,19 @@ async function resolveForward(
   ctx: ResolveContext,
 ): Promise<ResolvedSegment> {
   const id = data['id']
-  const messageId = String(id ?? '')
+  const token = String(id ?? '')
   const xmlSummary = extractForwardXml(raw)
 
-  if (messageId === '') return { kind: 'forward', block: undefined, xmlSummary }
+  if (token === '') return { kind: 'forward', block: undefined, xmlSummary }
 
   // 展开器实例**每个转发段一个**：计数器与 first 标志都挂在它身上。
   const expander = new ForwardExpander(
-    { getMessage: ctx.getMessage, fetchImage: ctx.fetchImage, ...ctx.describe === undefined ? {} : { describe: ctx.describe } },
+    {
+      getMessage: ctx.getMessage,
+      getForward: ctx.getForward,
+      fetchImage: ctx.fetchImage,
+      ...ctx.describe === undefined ? {} : { describe: ctx.describe },
+    },
     {
       imageMode: ctx.options.imageMode,
       maxDepth: ctx.options.maxDepth,
@@ -153,7 +158,15 @@ async function resolveForward(
       expandTimeoutMs: ctx.options.expandTimeoutMs,
     },
   )
-  const block = await attempt(() => expander.expand(messageId, undefined))
+  // ★ 渲染成 `(msg_id = …)` 的是**外层那条消息的真实 id**，不是这坨 token。
+  //   那个位置的契约是"可拿来引用的消息号"（`reply_to`），而 token 当 `message_id`
+  //   用会被协议端回 `retcode 1400 · "message_id: expected a message id"`。
+  const outerId = raw['message_id']
+  const block = await attempt(() => expander.expand(
+    token,
+    undefined,
+    outerId === undefined ? '' : String(outerId),
+  ))
   return { kind: 'forward', block, xmlSummary }
 }
 

@@ -266,7 +266,15 @@
     - id: perception
       name: './plugins/perception/index.ts'
       config:
-        idleIntervalMs: 1800000
+        # ⚠️ **临时值**，只为跑 C/D 验证 —— 生产值是 `idleIntervalMs: 1800000`（30 分钟）。
+        #    原因：感知条目由这个闲时定时器驱动，30 分钟跑不完一轮验证
+        #    （实测跑了 3 分钟 `perceptions=0`）。**验完两行都改回去（或整块删掉）。**
+        #
+        #    ★ 光调 `idleIntervalMs` **不够** —— `minIntervalMs` 默认 5 分钟，而
+        #      `clampInterval()` 会把更小的值**静默夹上去**（夹取而不是拒绝，刻意的）。
+        #      所以下限也必须一起降，否则 `60000` 会被悄悄变成 `300000`。
+        idleIntervalMs: 60000
+        minIntervalMs: 30000
         persist: true
     # ── 工具 ─────────────────────────────────────────────────────────
     # 会话历史的检索工具（**DSH 原生**，一口气五个）：
@@ -362,7 +370,20 @@
           # blacklist + 空表 = **所有私聊都放行**（不是"不收私聊"）。
           mode: blacklist
           list: []
-
+        # 原始帧采集 —— **实验素材**。默认关，按"每类计数 + 每类 N 条完整样本"存，
+        # 所以文件大小有硬上限、与流量无关。
+        #
+        # ⚠️ 里面是**原样**的群聊与私聊内容（含 QQ 号），不脱敏 ——
+        #    所以它必须落在不进版本库的地方（`data/` 已被 `.gitignore` 覆盖）。
+        #
+        # ★ 现在**关着**（设施默认）。要攒素材时改成 `true` 即可 —— 它已经完成过一次
+        #   实战：查"合并转发解析失败"时，靠它抓到了协议端的原话
+        #   `retcode 1400 · "message_id: expected a message id"`（那条错误在日志里
+        #   一个字都没有，被 `attempt()` 吞了）。详见 `capture.ts` 的模块注释。
+        capture:
+          enabled: false
+          path: !!js "process.env.DSH_HOME + '/data/raw-frames.json'"
+          samplesPerKind: 20
     # ② 工具包装：把 ctx.qq 的能力包成模型可调用的工具。
     # inject ['tools','qq']，两者都就绪后才激活。
     - id: qq-tools

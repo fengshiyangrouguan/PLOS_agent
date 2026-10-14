@@ -26,7 +26,7 @@
 import { faceToText } from './face.ts'
 import { parseJsonCard } from './card.ts'
 import { displayNameOf } from '../protocol/index.ts'
-import type { Segment } from '../protocol/index.ts'
+import type { ForwardNode, Segment } from '../protocol/index.ts'
 import type { ForwardBlock, ForwardSubMessage, ImageDescriber, ResolvedImage, ResolvedSegment } from './segment.ts'
 
 /** 转发内出现 `reply` 段时的占位。 */
@@ -41,6 +41,11 @@ const GROUP_TITLE = '群聊的聊天记录'
 export interface ForwardContext {
   /** 取一条消息的原始段；失败返回 undefined。 */
   getMessage: (messageId: string) => Promise<{ segments: Segment[], senderName: string | undefined } | undefined>
+  /**
+   * 取合并转发的内容。参数是 `forward` 段 `data.id` 那坨 token，**原样传**。
+   * 见 `protocol.ActionMap['get_forward_msg']` 的三条实测结论。
+   */
+  getForward: (token: string) => Promise<readonly ForwardNode[] | undefined>
   /** 下载图片并转 base64；失败返回 undefined。 */
   fetchImage: (url: string) => Promise<{ base64: string, mimeType: string } | undefined>
   /** VLM 描述器。 */
@@ -84,45 +89,47 @@ export class ForwardExpander {
    * @param rawTitle - 从事件 XML 里抠出的标题；没有就按子消息类型推断。
    * @returns 转发块；无法展开时 undefined。
    */
-  async expand(messageId: string, rawTitle: string | undefined): Promise<ForwardBlock | undefined> {
-    const detail = await this.withTimeout(this.ctx.getMessage(messageId), this.options.expandTimeoutMs)
-    if (detail === undefined) return undefined
-
-    // 取**第一个**携带非空 content 的 forward 段。一条消息里出现多个是异常的，不处理。
-    for (const segment of detail.segments) {
-      if (segment.type !== 'forward') continue
-      const content = segment.data['content']
-      if (!Array.isArray(content) || content.length === 0) continue
-      const title = rawTitle ?? this.inferTitle(content)
-      return await this.buildBlock(content as Segment[], title, messageId, 0)
-    }
-    return undefined
+  /**
+   * 展开一个转发消息。
+   *
+   * 失败（查不到 / 超时 / 没有 forward 段）返回 `undefined`，由调用方回退到 XML 摘要。
+   *
+   * @param token - `forward` 段 `data.id` 那坨**不透明 token**（喂给 `get_forward_msg`）。
+   * @param rawTitle - 从事件 XML 里抠出的标题；没有就按子消息类型推断。
+   * @param displayId - 渲染成 `(msg_id = …)` 的那个 id。
+   *   ★ **是外层那条消息的真实 `message_id`，不是 `token`。**
+   *   这个位置的契约是"可拿来引用的消息号"（`reply_to`），而 token 拿去当
+   *   `message_id` 会被协议端回 `retcode 1400`。整棵子树都记外层那个 id ——
+   *   要回复这棵里的任何一条，回复的都是外层那条消息。
+   * @returns 转发块；无法展开时 undefined。
+   */
+  async expand(token: string, rawTitle: string | undefined, displayId: string): Promise<ForwardBlock | undefined> {
+    // ★ 走 `get_forward_msg`，**不是** `get_msg`。
+    //
+    //   老设计假设"`get_msg` 回传的 forward `content` 是递归完整消息树"——
+    //   那是实验期协议端（老 NapCat）的行为。**SnowLuma 不是**：`get_msg`
+    //   回传的 forward 段 `data` 里只有那坨 token，所以那条路永远展开不出东西。
+    //   实测正确的动作是 `get_forward_msg(token)`，回的是扁平的消息数组。
+    const nodes = await this.withTimeout(this.ctx.getForward(token), this.options.expandTimeoutMs)
+    if (nodes === undefined || nodes.length === 0) return undefined
+    const title = rawTitle ?? this.inferTitle(nodes)
+    return await this.buildBlock(nodes, title, displayId, 0)
   }
 
   /** 按子消息的 `message_type` 推断标题。 */
-  private inferTitle(content: readonly unknown[]): string {
-    for (const node of content) {
-      const type = this.nodeType(node)
-      if (type === 'group') return GROUP_TITLE
-      if (type === 'private') return DEFAULT_TITLE
+  private inferTitle(nodes: readonly ForwardNode[]): string {
+    for (const node of nodes) {
+      if (node.message_type === 'group') return GROUP_TITLE
+      if (node.message_type === 'private') return DEFAULT_TITLE
     }
     return DEFAULT_TITLE
   }
 
-  /** 读一个转发子节点的 `message_type`。 */
-  private nodeType(node: unknown): string | undefined {
-    if (node === null || typeof node !== 'object') return undefined
-    const data = (node as { data?: unknown }).data
-    if (data === null || typeof data !== 'object') return undefined
-    const type = (data as { message_type?: unknown }).message_type
-    return typeof type === 'string' ? type : undefined
-  }
-
-  /** 构造一个转发块。 */
+  /** 构造一个转发块。`displayId` 见 `expand()` —— 全树都记外层那个真实 id。 */
   private async buildBlock(
-    content: readonly Segment[],
+    content: readonly ForwardNode[],
     title: string,
-    messageId: string,
+    displayId: string,
     depth: number,
   ): Promise<ForwardBlock> {
     const messages: ForwardSubMessage[] = []
@@ -133,16 +140,20 @@ export class ForwardExpander {
         truncated = content.length - messages.length
         break
       }
-      const sub = await this.buildSub(node, depth)
+      // ★ `{ data: node }` 这一层包装是**刻意的适配**：SnowLuma 的节点是扁平的，
+      //   而 `buildSub` / `senderName` 读的是 `node.data.*`（老 NapCat 的包装形状）。
+      //   包一层，两边都不用改 —— 而扁平的 `sender` / `message` / `message_type`
+      //   恰好都在 `data` 会指向的那个位置。
+      const sub = await this.buildSub({ data: node }, depth, displayId)
       if (sub === undefined) continue
       messages.push(sub)
       this.count += 1
     }
-    return { title, messageId, messages, truncated }
+    return { title, messageId: displayId, messages, truncated }
   }
 
   /** 构造一条子消息。 */
-  private async buildSub(node: unknown, depth: number): Promise<ForwardSubMessage | undefined> {
+  private async buildSub(node: unknown, depth: number, displayId: string): Promise<ForwardSubMessage | undefined> {
     if (node === null || typeof node !== 'object') return undefined
     const data = (node as { data?: unknown }).data
     if (data === null || typeof data !== 'object') return undefined
@@ -158,7 +169,7 @@ export class ForwardExpander {
         if (raw === null || typeof raw !== 'object') continue
         if (raw.type === 'sender') continue // 发送者已单独取，跳过
         if (raw.type === 'forward') {
-          nested = await this.buildNested(raw.data, depth)
+          nested = await this.buildNested(raw.data, depth, displayId)
           continue
         }
         const resolved = await this.resolveSubSegment(raw)
@@ -230,15 +241,19 @@ export class ForwardExpander {
     }
   }
 
-  /** 展开嵌套转发。 */
-  private async buildNested(data: Record<string, unknown>, depth: number): Promise<ForwardBlock | undefined> {
+  /** 展开嵌套转发。token 同样走 `get_forward_msg` —— 嵌套节点的 `message_id` 是 `0`。 */
+  private async buildNested(
+    data: Record<string, unknown>,
+    depth: number,
+    displayId: string,
+  ): Promise<ForwardBlock | undefined> {
     if (depth + 1 > this.options.maxDepth) return undefined
-    const content = data['content']
-    if (!Array.isArray(content) || content.length === 0) return undefined
-    // 嵌套块**只用推断标题**（实验期不传 rawTitle）。
-    const title = this.inferTitle(content)
-    const id = data['id']
-    return await this.buildBlock(content as Segment[], title, String(id ?? ''), depth + 1)
+    const token = data['id']
+    if (typeof token !== 'string' || token === '') return undefined
+    const nodes = await this.withTimeout(this.ctx.getForward(token), this.options.expandTimeoutMs)
+    if (nodes === undefined || nodes.length === 0) return undefined
+    // 嵌套块**只用推断标题**（实验期不传 rawTitle）；`displayId` **继续往下传**。
+    return await this.buildBlock(nodes, this.inferTitle(nodes), displayId, depth + 1)
   }
 
   /** 按 `imageMode` 处理转发内的图片。 */

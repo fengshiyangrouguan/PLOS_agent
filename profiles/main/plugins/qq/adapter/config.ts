@@ -82,6 +82,23 @@ export interface Config {
     /** 保留的会话数上限；超出按最久未活动淘汰。 */
     conversations: number
   }
+  /**
+   * 原始帧采集 —— **实验素材**，默认关。见 `capture.ts`。
+   *
+   * 它按"每类计数 + 每类 N 条完整样本"存，所以文件大小有硬上限、与流量无关。
+   * 想让素材攒着以备将来动别的 `post_type`（notice / request / 回执……），才开它。
+   */
+  capture: {
+    /** 是否采集。 */
+    enabled: boolean
+    /**
+     * 落盘路径。**启用时必填** —— 空串不采集并记 warn（宁可响，不要静默不生效）。
+     * 注意里面是**原样**的群聊与私聊内容，所以路径必须落在不进版本库的地方。
+     */
+    path: string
+    /** 每类保留多少条完整样本。 */
+    samplesPerKind: number
+  }
 }
 
 /** 配置校验。DSH 约定：插件内不放硬编码可调项，随部署变化的都从这里进。 */
@@ -115,4 +132,10 @@ export const Config: z<Config> = z.object({
     perConversation: z.natural().min(1).default(50),
     conversations: z.natural().min(1).default(32),
   }).default({ perConversation: 50, conversations: 32 }),
+  // 默认关：它是"要素材时才开"的东西，不是常开日志。
+  capture: z.object({
+    enabled: z.boolean().default(false),
+    path: z.string().default(''),
+    samplesPerKind: z.natural().min(1).default(20),
+  }).default({ enabled: false, path: '', samplesPerKind: 20 }),
 })

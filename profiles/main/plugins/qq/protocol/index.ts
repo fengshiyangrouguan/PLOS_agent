@@ -172,6 +172,46 @@ export interface ActionMap {
   get_stranger_info: { params: { user_id: number }, result: StrangerInfo }
   get_group_member_list: { params: { group_id: number }, result: GroupMember[] }
   set_group_ban: { params: { group_id: number, user_id: number, duration: number }, result: unknown }
+  /**
+   * 取合并转发（聊天记录）的内容。
+   *
+   * ## ★ 这个动作是**实测**试出来的，三个坑都在这里
+   *
+   * 1. **`message_id` 收的是 `forward` 段 `data.id` 那坨不透明 token，不是消息号。**
+   *    拿它去调 `get_msg` 会被回 `retcode 1400 · "message_id: expected a message id"`
+   *    —— 而 `Number(token)` 是 `NaN`，序列化后变 `null`，所以请求从一开始就是垃圾。
+   *    所以这里声明成 **`string`**，不要 `Number()`。
+   * 2. **回来的不是消息树，是一个扁平的消息数组**（`data.messages`）——
+   *    见 {@link ForwardNode}。`get_msg` 那条路**拿不到转发内容**：
+   *    它回传的 forward 段 `data` 里只有那个 token。
+   * 3. 实测 `{ id: token }` 也能用，但 `message_id` 是 OneBot 的正规拼写，取它。
+   */
+  get_forward_msg: { params: { message_id: string }, result: { messages: ForwardNode[] } }
+}
+
+/**
+ * `get_forward_msg` 回来的一条子消息。
+ *
+ * **扁平**：`message_type` / `sender` / `message` 直接挂在顶层，
+ * **没有** `get_msg` 那种 `{data: {...}}` 包装。
+ *
+ * ★ 老 NapCat 是**有包装**的，而 `ForwardExpander` 一直按包装读
+ * （`node.data.message_type`、`node.data.content`）—— 所以在 SnowLuma 上
+ * 什么都读不到，最终渲染成 `[聊天记录(解析失败)]`。
+ * 现在展开器把扁平节点包一层再交给同一套读法，两边都不用改。
+ */
+export interface ForwardNode {
+  user_id?: number
+  time?: number
+  message_type?: string
+  sub_type?: string
+  /** 发送者。与顶层消息的 `Sender` 同构（含 `card`）。 */
+  sender?: Sender
+  /** 这一条的段。 */
+  message?: Segment[]
+  /** ★ 嵌套转发时它是 `0` —— 递归只能靠段里的 token。 */
+  message_id?: number
+  message_seq?: number
 }
 
 /** 所有支持的 action 名。 */

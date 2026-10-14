@@ -319,12 +319,49 @@
     #
     # accessToken 从环境变量取，**不落进版本库**：值写在 $DSH_HOME/.env
     # （已被 .gitignore 忽略），DSH 启动时经 loadLayeredEnv 的 user 层注入。
+    #
+    # ★★ **`config` 是整块替换，不是深合并**（本文件开头那条规则）——
+    #    改名单时 `wsUrl` / `accessToken` / `selfId` 必须**一起带上**，
+    #    少写一个就退回 schema 默认值（`accessToken` 默认空串 = **鉴权失效**）。
+    #
+    # ## 名单语义（`adapter/index.ts:418-421`）
+    #
+    #     allowed = (mode === 'whitelist') ? list.includes(id) : !list.includes(id)
+    #
+    #   · `whitelist` + 表   → **只有表里的收**
+    #   · `blacklist` + 空表 → `!hit` 恒真 ⇒ **放行一切**（刻意如此：自动生成的配置
+    #     不该默认拒绝所有消息。但反过来，"留空 = 什么都不收"是不对的直觉）
+    #   · `whitelist` + 空表 → **谁都不收**
+    #
+    # 被丢的消息**彻底不存在**：在 `onMessage` 最前面就 return，不入缓冲、
+    # 不存档、不产生感知信号，只打一行 debug 日志（本行下面正是 debug 级）。
+    #
+    # ## 群与私聊是**两套独立名单**
+    #
+    # 现在：**群白名单 5 个**；**私聊全放行**（blacklist + 空表，即用户给的
+    # `private_list_type = blacklist` / `private_list = []` 的语义）。
+    # 想什么都不收就写 `mode: whitelist` + `list: []`。
+    #
+    # ⚠️ **白名单里的群会被**逐条**收下**（不是"只收 @ 我的"）：白名单只决定
+    #    "这个会话的消息进不进来"。而 `qq/signals` 会**把每条都存档**，顶层图片
+    #    还会**逐张下载 + 调 VLM 描述**（`imageMode` 只管转发**内**的图）。
+    #    所以往白名单里加一个几百人的大群，等于给那个群的每张图付费。
     - id: qq-adapter
       name: './plugins/qq/adapter/index.ts'
       config:
         wsUrl: ws://127.0.0.1:3001
         accessToken: !!js "process.env.QQ_ACCESS_TOKEN ?? ''"
-        selfId: ''
+        # 兜底值。适配器连上后会自己调 `get_login_info` 拿真实 QQ 并用它判 AT_ME，
+        # 这里只在"还没连上就收到消息"的边缘情况下用。与实测登录号一致。
+        selfId: '352699068'
+        groups:
+          mode: whitelist
+          # 五个群。注意 `871074118` 是 300+ 人的群，见上面那条成本提醒。
+          list: ['784394807', '728636404', '914615760', '1018564056', '871074118']
+        private:
+          # blacklist + 空表 = **所有私聊都放行**（不是"不收私聊"）。
+          mode: blacklist
+          list: []
 
     # ② 工具包装：把 ctx.qq 的能力包成模型可调用的工具。
     # inject ['tools','qq']，两者都就绪后才激活。

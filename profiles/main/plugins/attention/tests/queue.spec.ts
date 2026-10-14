@@ -49,16 +49,26 @@ function check(label: string, actual: unknown, expected: unknown): void {
 
 /**
  * 造一个带标记的感知条目。
- * @param tag - 放进正文里用于辨认。
+ *
+ * **来源按 `tag` 派生**（不是按信号序号）—— 这样"不同 tag"就等于"不同会话"，
+ * 不会因为都叫 `s0` 而被**同来源合并**规则吃掉。要测合并就显式传同一个 `source`。
+ *
+ * @param tag - 放进正文里用于辨认，同时是默认来源。
  * @param highest - 最高优先级。
  * @param signals - 信号条数（默认 1，让 `quiet` 与 `highest` 自洽）。
+ * @param source - 显式指定来源；默认用 `tag`。
  */
-function notice(tag: string, highest: number, signals = 1): PerceptionNotice {
+function notice(tag: string, highest: number, signals = 1, source = tag): PerceptionNotice {
   return {
     at: 0,
     text: tag,
     signals: Array.from({ length: signals }, (_unused, i) => ({
-      kind: 'k', data: {}, source: `s${String(i)}`, domain: 'D', priority: highest, line: tag,
+      kind: 'k',
+      data: {},
+      source: signals > 1 ? `${source}#${String(i)}` : source,
+      domain: 'D',
+      priority: highest,
+      line: tag,
     })),
     highest,
     quiet: highest === 0,
@@ -176,6 +186,49 @@ function tagOf(item: { notice: PerceptionNotice } | undefined): string | undefin
 
   queue.clear()
   check('clear 清空', queue.size, 0)
+}
+
+// ── ★ 同来源合并（用户定案）：整条换新，位置留旧的 ──────────────────
+{
+  const queue = new PendingQueue()
+  queue.push(notice('先来的', 20, 1, 'group:1'), 100)
+  queue.push(notice('别人', 20, 1, 'group:2'), 200)
+
+  // 同来源（group:1）再来一条：不新开，并进已有那条。
+  queue.push(notice('后补的', 20, 1, 'group:1'), 300)
+  check('★ 同来源不新开一条', queue.size, 2)
+
+  const tags = [tagOf(queue.drain()), tagOf(queue.drain())]
+  check('★ 同来源的内容取最新', tags.includes('后补的'), true)
+  check('★ 老内容被换掉（不是并排两条）', tags.includes('先来的'), false)
+}
+
+// ── ★ 位置留旧的：同优先级下，先来的仍在前面 ────────────────────────
+{
+  const queue = new PendingQueue()
+  queue.push(notice('甲', 20, 1, 'group:1'), 100)   // 队位最前
+  queue.push(notice('乙', 20, 1, 'group:2'), 200)
+
+  // 甲又来一条（更晚的时间戳）。若"位置被刷新"，乙就会排到前面去。
+  queue.push(notice('甲新', 20, 1, 'group:1'), 300)
+  check('★ 合并后位置留在旧的（先来的仍先走）', tagOf(queue.peek()), '甲新')
+}
+
+// ── 不同来源不合并 ──────────────────────────────────────────────────
+{
+  const queue = new PendingQueue()
+  queue.push(notice('甲', 20, 1, 'group:1'), 100)
+  queue.push(notice('乙', 20, 1, 'group:2'), 200)
+  check('不同来源各占一格', queue.size, 2)
+}
+
+// ── 同来源跨等级也合并（0 级升到 20 级）─────────────────────────────
+{
+  const queue = new PendingQueue()
+  queue.push(notice('群里有人说', 0, 1, 'group:1'), 100)
+  queue.push(notice('@我了', 20, 1, 'group:1'), 200)
+  check('★ 同来源跨等级合并成一条', queue.size, 1)
+  check('★ 合并后优先级取新的', queue.peek()?.notice.highest, 20)
 }
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

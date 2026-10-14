@@ -21,6 +21,15 @@
  * - **同优先级** → 按到达顺序排队
  * - `priority: 0` → 最多一条，新的顶掉旧的
  *
+ * ## ★ 同来源合并（用户定案）
+ *
+ * 入队时若已有条目与它**共享来源**，则**整条换成新的、位置留在旧的那儿**。
+ *
+ * - **内容取最新**：理由见下面那条 —— 拉取返回的是**当前状态**，
+ *   所以新条目**本身已包含**旧条目里那些来源的未读状态，换新不丢东西。
+ * - **位置留旧**：谁先来谁先被服务。一个话多的会话不能靠持续发言改变自己的位置。
+ * - 于是队列**按会话数增长，不按消息量增长**。
+ *
  * 注意这里只做**排序**，不做"要不要叫醒她"的决定 —— 那是调用方的事。
  * 打断的判定（`deliver` / `queue` / `steer` / `cancel`）也不在这里，
  * 见 `preempt.ts` 与 `docs/m5-preemption.md` §20。
@@ -32,6 +41,20 @@
  */
 
 import { PRIORITY_PASSIVE, type PerceptionNotice } from '../perception/types.ts'
+
+/**
+ * 两条条目是否来自同一个来源。
+ *
+ * 来源取**交集**：一条通知可以带多个来源的信号（`perception` 一次拉取会覆盖
+ * 所有有未读的会话），任意一个重合就算同来源。
+ *
+ * @param left - 一条已排队的通知。
+ * @param right - 新到的通知。
+ * @returns 是否共享至少一个来源。
+ */
+function sharesSource(left: PerceptionNotice, right: PerceptionNotice): boolean {
+  return left.signals.some(signal => right.signals.some(other => other.source === signal.source))
+}
 
 /** 队列里的一个待交付项。 */
 export interface PendingItem {
@@ -68,6 +91,21 @@ export class PendingQueue {
    * @param now - 入队时间（毫秒）。注入以便自检。
    */
   push(notice: PerceptionNotice, now: number = Date.now()): void {
+    // ★ ① 同来源合并（用户定案）：命中已有条目就**整条换新、位置留旧的**。
+    //
+    //   "换新不丢内容"的理由：`pull()` 返回的是**当前状态**而不是增量日志
+    //   （见 `qq/signals` 的 `collect()` 注释），所以新的一次拉取**本身就已经包含**
+    //   旧条目里那些来源的未读状态。
+    //
+    //   "位置留旧" = 谁先来谁先被服务；一个话多的会话不能靠持续发言改变自己的位置。
+    const merged = this.#items.findIndex(item => sharesSource(item.notice, notice))
+    if (merged >= 0) {
+      const previous = this.#items[merged]
+      if (previous !== undefined) this.#items[merged] = { notice, queuedAt: previous.queuedAt }
+      return
+    }
+
+    // ② 0 级条目最多一条：已有 0 级时，新的**顶掉**旧的（保留最新）。
     if (notice.quiet) {
       const index = this.#items.findIndex(item => item.notice.quiet)
       const item: PendingItem = { notice, queuedAt: now }
@@ -76,6 +114,7 @@ export class PendingQueue {
       return
     }
 
+    // ③ 其余按正常入队。
     this.#items.push({ notice, queuedAt: now })
     if (this.#items.length > this.#capacity) {
       // 丢最旧的**非 0 级**项；0 级只有一条且是"最新的"，不动它。

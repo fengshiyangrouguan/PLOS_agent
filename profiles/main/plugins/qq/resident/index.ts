@@ -151,11 +151,7 @@ export function apply(ctx: Context, config: Config): void {
       //
       // 每次启动都写（即使存档里已经指着她）：一次多余的 IO 换"崩了也认得自己是谁"，
       // 而且 `set` 是原子落盘（临时文件 + 改名）。
-      ctx.pointer.set({
-        sessionId: created.agent.id,
-        tcb: tcb?.id ?? ctx.tcb.defaultId,
-        updatedAt: Date.now(),
-      })
+      ctx.pointer.set({ sessionId: created.agent.id })
 
       // ★ 注入"上次是停下来的"（优雅关闭原理）。
       //

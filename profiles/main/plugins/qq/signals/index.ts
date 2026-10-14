@@ -74,6 +74,33 @@ const PRIORITY_PRIVATE = 20
 const PRIORITY_GROUP = 0
 
 /**
+ * 唤醒的防抖窗口（毫秒）。
+ *
+ * `< 80` 的唤醒是"有人找你"，不是"出事了" —— 一批连着来的消息
+ * **合并成一次拉取**就够了。这不光省事，也是 Shiraha_OS 的做法。
+ *
+ * ★ **合并不会漏内容**：`pull()` 返回的是**当前状态**而不是增量日志
+ * （见 `collect()` 的注释），所以后一次拉取本身已包含前面的消息；
+ * 而 `attention` 队列的**同来源合并**（`queue.ts`）保证它们只占一格、内容取最新。
+ */
+const WAKE_DEBOUNCE_MS = 300
+
+/**
+ * 一条入站消息是否"**产生自己的唤醒**"。
+ *
+ * 与 `collect()` 里的优先级赋值**同源**：@我 → 20、私聊 → 20、普通群消息 → 0。
+ * `0` 的定义就是"不产生自己的唤醒"（`design.pre-m5.md:134`）。
+ *
+ * 这里只看"是不是冲她来的"，**不判优先级数值** —— 数值的归属在 `collect()` 里一处。
+ *
+ * @param incoming - 入站消息。
+ * @returns 是否该发起一次信号拉取。
+ */
+function wakes(incoming: QqIncoming): boolean {
+  return incoming.mentionsSelf || incoming.groupId === undefined
+}
+
+/**
  * 把一条入站消息渲染成文本并存档。
  *
  * 渲染可能有 I/O（图片下载 / VLM 描述），所以是异步的；失败只记日志 ——
@@ -172,6 +199,39 @@ function collect(ctx: Context): Signal[] {
  * @param ctx - 插件上下文。
  */
 export function apply(ctx: Context): void {
+  // ── ★ ② 信号拉：`priority > 0` 的信号**产生自己的唤醒** ─────────────
+  //
+  //   ★ 这是感知的**两根轴**里被漏掉的那一根（另一根是闲时定时拉）：
+  //
+  //       `docs/design.pre-m5.md:91`
+  //         │ ① 定时拉（闲时，30 分钟） │ ② **信号拉（带优先级）**
+  //       `:134`
+  //         | **0** | 不太有用的信息 | **不产生自己的唤醒**，只搭下一次唤醒的便车 |
+  //
+  //   没有它，一条私聊只能等闲时定时器（生产值 **30 分钟**）—— 等于没在听。
+  //   而 `perception.tick()` 本来就是个公开方法，只是此前**唯一调用方是定时循环**。
+  //
+  //   注意 `attention` 的模块注释（"信号发起的拉取 ⟹ `highest > 0`"）与
+  //   删掉 `trigger` 字段（提交 `2ab635d`）都**以这根轴存在为前提** ——
+  //   所以接上它同时也是把那两处的依据补实。
+  let wakeTimer: ReturnType<typeof setTimeout> | undefined
+  const wake = (): void => {
+    // 已排定 ⇒ 并进那一次（防抖）。
+    if (wakeTimer !== undefined) return
+    wakeTimer = setTimeout(() => {
+      wakeTimer = undefined
+      void ctx.perception.tick().catch((error: unknown) => {
+        ctx.logger.warn(
+          'qq-signals: 信号拉取失败：%o',
+          error instanceof Error ? error.message : String(error),
+        )
+      })
+    }, WAKE_DEBOUNCE_MS)
+  }
+  ctx.effect(() => () => {
+    if (wakeTimer !== undefined) clearTimeout(wakeTimer)
+  })
+
   // ── 存档：每条消息进库（设计 §6.5「后台每一条都进库」）────────────
   ctx.on('qq/message', (incoming) => {
     void archive(ctx, incoming).catch((error: unknown) => {
@@ -180,6 +240,8 @@ export function apply(ctx: Context): void {
         error instanceof Error ? error.message : String(error),
       )
     })
+    // 冲她来的消息**当场叫醒感知层**去拉一次；普通群消息（0 级）不叫，只搭便车。
+    if (wakes(incoming)) wake()
   })
 
   // ── 信号源：注册即 effect，随插件卸载 ────────────────────────────

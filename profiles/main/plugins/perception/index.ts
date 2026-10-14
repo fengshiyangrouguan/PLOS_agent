@@ -86,17 +86,46 @@ export class Perception extends Service {
   }
 
   /**
+   * 配置里的上下限，**已经容错排好序**。
+   *
+   * 上下限是配置项，写反了按 min/max 纠正 —— 在这里排一次序，
+   * 让夹取和对外那两个 getter 用**同一对值**（不各算一遍）。
+   *
+   * @returns `[下限, 上限]`（毫秒）。
+   */
+  private bounds(): [low: number, high: number] {
+    return [
+      Math.min(this.config.minIntervalMs, this.config.maxIntervalMs),
+      Math.max(this.config.minIntervalMs, this.config.maxIntervalMs),
+    ]
+  }
+
+  /**
+   * 闲时间隔的**下限**（毫秒）。
+   *
+   * 暴露给模型侧那个工具 —— 它要把"可设范围"写进工具描述，
+   * 否则她只能靠试探才知道边界在哪。
+   */
+  get minIntervalMs(): number {
+    return this.bounds()[0]
+  }
+
+  /** 闲时间隔的**上限**（毫秒）。 */
+  get maxIntervalMs(): number {
+    return this.bounds()[1]
+  }
+
+  /**
    * 按配置的 `minIntervalMs`/`maxIntervalMs` 夹取间隔。
    *
    * 上下限是**配置项**，所以夹取放在运行时 —— schema 层没法引用别的配置字段
-   * （见 `config.ts` 的说明）。上下限本身也容错：写反了按 min/max 纠正。
+   * （见 `config.ts` 的说明）。
    *
    * @param ms - 期望的间隔（毫秒）。
    * @returns 夹取后的间隔。
    */
   private clampInterval(ms: number): number {
-    const low = Math.min(this.config.minIntervalMs, this.config.maxIntervalMs)
-    const high = Math.max(this.config.minIntervalMs, this.config.maxIntervalMs)
+    const [low, high] = this.bounds()
     if (!Number.isFinite(ms)) return low
     return Math.min(high, Math.max(low, Math.trunc(ms)))
   }
@@ -129,10 +158,14 @@ export class Perception extends Service {
   }
 
   /**
-   * 调整闲时间隔（给 AI 用的工具调）。
+   * 调整闲时间隔 —— **消费方是 `perception/tools.ts` 那个工具**（她调自己）。
    *
    * 超出 `MIN..MAX` 时**夹住而不是报错** —— 她调一个 3 分钟或 48 小时，
    * 意图是清楚的（更勤/更懒），没必要时失败。
+   *
+   * ⚠️ **只在内存里**（用户定案）：重启回到 `config.idleIntervalMs`。
+   * 跟 `currentPriority` 同一条思路 —— 运行时旋钮，不为它加状态。
+   * 所以工具描述里必须说清这件事，否则她会以为自己设过的值一直在。
    *
    * @param ms - 期望的间隔（毫秒）。
    * @returns 实际生效的间隔。

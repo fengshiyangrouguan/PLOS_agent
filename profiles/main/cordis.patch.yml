@@ -242,6 +242,23 @@
     - id: tool-session-query
       name: '@deepseek-ai/dsh-tool-session-query'
 
+    # 「我自己多久醒一次」：让白羽调闲时间隔（`ctx.perception.setIdleIntervalMs`）。
+    #
+    # ★ 引擎侧早就为它写好了，缺的只是这个**模型可见的消费者**：
+    #   `perception` 的方法标着「给 AI 用的工具调」，而且那个循环**刻意不用
+    #   `setInterval`** —— 它"每轮结束后按当时的间隔排下一轮"，所以**她改完立刻生效**。
+    #
+    # 为什么单独一个插件而不是塞进 perception：那样那个设施就得注入 `tools`、
+    # 认识"工具"这个概念，而别的领域只是想注册一个信号源（能力 seam 的 Consumer 角色）。
+    #
+    # ★ 值**不持久化**（用户定案）：重启回到 `config.idleIntervalMs`。跟 currentPriority
+    #   同一条思路 —— 运行时旋钮不加状态。工具描述里写明了这件事。
+    #
+    # inject ['tools','perception']，所以它必须排在 perception 之后；
+    # 也必须排在 qq-resident 之前 —— 启动自述由最后一行补打。
+    - id: perception-tools
+      name: './plugins/perception/tools.ts'
+
     # ── QQ 领域 ──────────────────────────────────────────────────────
     # 目录结构照 DSH 的分法：**分组在「包」级别**（qq/adapter、qq/tools…），
     # 每个包内部保持扁平 —— DSH 的 packages/<group>/<pkg>/src 也是平的

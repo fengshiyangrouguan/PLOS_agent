@@ -76,12 +76,17 @@ function checkTrue(label: string, actual: boolean): void {
     { kind: 'steer', record: false },
   )
   check(
-    '忙碌 + 20，原任务是 20 级 → steer，★记待办（情形②：私聊被终端打断）',
+    '★ 忙碌 + 20，原任务也是 20 级 → **排队**（同优先级 FIFO，不插队）',
     planTransfer('running', 20, 20),
-    { kind: 'steer', record: true },
+    { kind: 'queue' },
   )
   check(
-    '忙碌 + 79 → 还是软转移（79 < 80）',
+    '★ 忙碌 + 更低的优先级 → **排队**（不同优先级之间才是高的接管）',
+    planTransfer('running', 20, 5),
+    { kind: 'queue' },
+  )
+  check(
+    '忙碌 + 79 → 还是软转移（79 < 80，且 79 > 原任务 20）',
     planTransfer('running', 20, 79),
     { kind: 'steer', record: true },
   )

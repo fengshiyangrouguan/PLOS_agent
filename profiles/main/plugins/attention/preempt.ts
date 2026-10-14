@@ -49,7 +49,7 @@
  * @module attention/preempt
  */
 
-import { PRIORITY_PASSIVE, PRIORITY_URGENT } from '../perception/types.ts'
+import { PRIORITY_URGENT } from '../perception/types.ts'
 
 /**
  * 收尾提示的原文。
@@ -127,8 +127,22 @@ export function planTransfer(
   thresholds: TransferThresholds = DEFAULT_THRESHOLDS,
 ): TransferPlan {
   if (status === 'idle') return { kind: 'deliver' }
-  // 忙的时候，0 级不转移注意力 —— 它只搭便车，等下一次空闲。
-  if (highest <= PRIORITY_PASSIVE) return { kind: 'queue' }
+  // ★ **不高于原任务的一律只排队**：0 级、同级、更低。
+  //
+  //   `highest <= PRIORITY_PASSIVE`（0 级）曾经是这里唯一的一条，那是不够的：
+  //   同优先级与更低优先级会一路走到下面去 `steer`，等于**谁的信号都能插进她正在做的事**。
+  //   而设计是"**不同**优先级之间才是高的立即接管"（`design.pre-m5.md:170-171`）：
+  //
+  //     | 同优先级（如都是 30）     | **排队**（FIFO，轮流）      |
+  //     | 不同优先级（如 30 与 31） | **不排队** —— 高的立即接管 |
+  //
+  //   0 级"只搭便车"仍成立 —— 它是本式在 `currentPriority >= 0` 下的特例。
+  //   （`status === 'idle'` 时 `currentPriority` 无意义，已在上一行返回。）
+  //
+  //   历史：自检里曾经用 `planTransfer('running', 20, 20) → steer` 钉住过相反的行为，
+  //   但那条的标签借的是 `m5-preemption.md:1031` 的「情形②：20 级被**更高级**打断」
+  //   —— 情形对不上（这里是**相等**），所以它钉错了。
+  if (highest <= currentPriority) return { kind: 'queue' }
 
   // 原任务是低注意力的（<= n）就不记待办：记下来也没有意义
   // —— 群里那段早聊过去了（§20.3 情形①）。

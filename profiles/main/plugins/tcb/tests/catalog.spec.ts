@@ -124,13 +124,14 @@ function sample(): unknown {
   checkBad('缺 tcbs', { default: 'a' }, /tcbs/)
 
   const noModel = { default: 'a', tcbs: { a: { sections: [] } } }
-  checkBad('缺 model', noModel, /缺少 "model"/)
+  // ★ 键名改成 `models`（组）之后，文案跟着变 —— 行为没变（照样报错）。
+  checkBad('缺 model（或 models）', noModel, /缺少 "models"/)
 
   const noProvider = { default: 'a', tcbs: { a: { model: { model: 'x' }, sections: [] } } }
   checkBad('model.provider 缺失', noProvider, /provider/)
 
   const noName = { default: 'a', tcbs: { a: { model: { provider: 'p' }, sections: [] } } }
-  checkBad('model.model 缺失', noName, /model\.model/)
+  checkBad('model.model 缺失', noName, /models\[\]\.model/)
 
   const noSections = { default: 'a', tcbs: { a: { model: { provider: 'p', model: 'm' } } } }
   checkBad('缺 sections', noSections, /sections/)

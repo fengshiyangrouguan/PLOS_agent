@@ -62,7 +62,22 @@ export interface ModelConfig {
 export interface Tcb {
   /** **稳定身份 id** —— 指针栈的帧上带的就是它。 */
   readonly id: string
-  /** 模型与参数覆盖。 */
+  /**
+   * ★★ **模型组** —— 配置里**唯一的模型键**。
+   *
+   * **第一个是默认**（没有余量、或没配组时就用它），**后面的都是轮换候选** ——
+   * 均衡器（`llm-throttle`）**读这个组**，在组内挑"还有余量"的那个。
+   *
+   * ★ **组内必须可互换**：同一份 messages / tools 都得吃得下。不满足的话，
+   * 会**在换过去那一瞬间**失败，而症状看起来像"模型坏了"。
+   */
+  readonly models: readonly ModelConfig[]
+  /**
+   * `= models[0]` —— ★ **派生值**，**不是**配置里的第二个键（配置只写 `models`）。
+   *
+   * 留着是给"只需要一个模型"的消费方读（`vlm2text` 拿它调 VLM、
+   * `interrupt_plan` 拿它起快照 subagent），这样那几处一行都不用改。
+   */
   readonly model: ModelConfig
   /**
    * 人设文本的来源（相对 `$DSH_HOME` 的路径）。
@@ -117,15 +132,35 @@ export function parseCatalog(raw: unknown): CatalogParse {
     if (typeof value !== 'object' || value === null) return { ok: false, error: `TCB "${id}" 不是对象` }
     const entry = value as Record<string, unknown>
 
-    const model = entry['model']
-    if (typeof model !== 'object' || model === null) return { ok: false, error: `TCB "${id}" 缺少 "model"` }
-    const m = model as Record<string, unknown>
-    if (typeof m['provider'] !== 'string' || m['provider'] === '') {
-      return { ok: false, error: `TCB "${id}" 的 model.provider 缺失或不是字符串` }
+    // ★ **模型组**。`models` 是配置里**唯一的键**；老的 `model`（单数）
+    //   仍然接受 ⇒ 内部当成 `models: [model]`（现有 `data/tcb.json` 一行都不用改）。
+    const rawModels = entry['models'] ?? (entry['model'] === undefined ? undefined : [entry['model']])
+    if (!Array.isArray(rawModels) || rawModels.length === 0) {
+      return { ok: false, error: `TCB "${id}" 缺少 "models"（或兼容的 "model"）` }
     }
-    if (typeof m['model'] !== 'string' || m['model'] === '') {
-      return { ok: false, error: `TCB "${id}" 的 model.model 缺失或不是字符串` }
+    const models: ModelConfig[] = []
+    for (const item of rawModels) {
+      if (typeof item !== 'object' || item === null) {
+        return { ok: false, error: `TCB "${id}" 的 models 里有一项不是对象` }
+      }
+      const m = item as Record<string, unknown>
+      if (typeof m['provider'] !== 'string' || m['provider'] === '') {
+        return { ok: false, error: `TCB "${id}" 的 models[].provider 缺失或不是字符串` }
+      }
+      if (typeof m['model'] !== 'string' || m['model'] === '') {
+        return { ok: false, error: `TCB "${id}" 的 models[].model 缺失或不是字符串` }
+      }
+      models.push({
+        provider: m['provider'],
+        model: m['model'],
+        reasoningEffort: typeof m['reasoningEffort'] === 'string' ? m['reasoningEffort'] : undefined,
+        temperature: typeof m['temperature'] === 'number' ? m['temperature'] : undefined,
+        maxTokens: typeof m['maxTokens'] === 'number' ? m['maxTokens'] : undefined,
+        stop: Array.isArray(m['stop']) ? m['stop'].filter((x): x is string => typeof x === 'string') : undefined,
+      })
     }
+    const first = models[0]
+    if (first === undefined) return { ok: false, error: `TCB "${id}" 的 models 是空的` }
 
     const sections = entry['sections']
     if (!Array.isArray(sections) || sections.some(item => typeof item !== 'string')) {
@@ -139,14 +174,8 @@ export function parseCatalog(raw: unknown): CatalogParse {
 
     tcbs.set(id, {
       id,
-      model: {
-        provider: m['provider'],
-        model: m['model'],
-        reasoningEffort: typeof m['reasoningEffort'] === 'string' ? m['reasoningEffort'] : undefined,
-        temperature: typeof m['temperature'] === 'number' ? m['temperature'] : undefined,
-        maxTokens: typeof m['maxTokens'] === 'number' ? m['maxTokens'] : undefined,
-        stop: Array.isArray(m['stop']) ? m['stop'].filter((x): x is string => typeof x === 'string') : undefined,
-      },
+      models,
+      model: first,
       identity,
       sections: sections as string[],
     })

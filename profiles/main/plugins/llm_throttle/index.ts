@@ -79,8 +79,8 @@ import z from '@deepseek-ai/schemastery'
 /** 插件名。 */
 export const name = 'llm-throttle'
 
-/** 只要 `llm` 这个 seam —— 它提供 `llm/stream` 瀑布。 */
-export const inject = ['llm']
+/** 只要 `llm`（`llm/stream` 瀑布）与 `tcb`（**模型组的唯一来源**）。 */
+export const inject = ['llm', 'tcb']
 
 /** 一个桶（`provider/model`）的预算。 */
 export interface BucketConfig {
@@ -120,13 +120,6 @@ export interface Config {
   defaults: BucketConfig
   /** ★ **按 `provider/model` 的覆盖** —— 硅基是**按模型**限速的。 */
   buckets: Record<string, BucketConfig>
-  /**
-   * ★ **同族模型组**：键是"TCB 点名的那个 `provider/model`"，
-   * 值是**它的等价候选**（可互换，见模块注释）。
-   *
-   * 空（默认）= **只限速、不均衡** —— 行为与没有均衡时一致。
-   */
-  groups: Record<string, Candidate[]>
   /** 被 429 拒过的模型**冷却多久**（毫秒）。 */
   cooldownMs: number
   /** 单次排队的上限（毫秒）—— 超过就**放行**（宁可冒险，也不许把她卡死）。 */
@@ -148,10 +141,6 @@ export const Config: z<Config> = z.object({
     tokensPerMinute: z.natural(),
     maxConcurrent: z.natural(),
   })).default({}),
-  groups: z.dict(z.array(z.object({
-    provider: z.string(),
-    model: z.string(),
-  }))).default({}),
   // 60 秒：实测被限之后同一模型短时间内再碰还是 429。
   cooldownMs: z.natural().default(60_000),
   maxWaitMs: z.natural().default(20_000),
@@ -351,7 +340,11 @@ export function apply(ctx: Context, config: Config): void {
       const tokens = estimateTokens(options)
 
       // ── ① 均衡：在等价候选里挑一个（没配组 ⇒ 只有自己）────────────
-      const group = config.groups[keyOf(options.provider, options.model)]
+      //
+      // ★★ **组从 TCB 读** —— 那是"某个 agent 用哪些模型"的**唯一真相源**。
+      //   在插件里再写一份映射就是同一个事实两处，必然分叉。
+      //   `groups()` 每次调用重建索引（只有几个 TCB），所以**改了 tcb.json 立刻生效**。
+      const group = ctx.tcb.groups().get(keyOf(options.provider, options.model))
       const candidates: readonly Candidate[] = group ?? [{ provider: options.provider, model: options.model }]
       let picked: Candidate = { provider: options.provider, model: options.model }
       try {

@@ -39,7 +39,7 @@ import z from '@deepseek-ai/schemastery'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Config as ConfigSchema, type Config } from './config.ts'
-import { parseCatalog, resolveTcb, type Tcb, type TcbCatalog } from './catalog.ts'
+import { parseCatalog, resolveTcb, type ModelConfig, type Tcb, type TcbCatalog } from './catalog.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -119,6 +119,37 @@ export class TcbRegistry extends Service {
    */
   get(id?: string | undefined): Tcb | undefined {
     return resolveTcb(this.catalog, id)
+  }
+
+  /**
+   * ★★ **模型组索引**：`provider/model` → 它所在的组。
+   *
+   * 均衡器（`llm-throttle`）拿一个请求的 `provider/model` 来查，
+   * 就知道"它属于哪个组、可以在组内换成谁" —— ★ **所以组只在 TCB 里配这一处**，
+   * 插件里不再写第二份映射（那必然分叉）。
+   *
+   * ⚠️ 一个模型可能出现在**多个** TCB 的组里（例如 `main` 与 `planner` 都用 V3.2）：
+   * 这时取**组更大的那个**，一样大取 id 排序在前的 —— **确定性的**，
+   * 不看 `Map` 的插入顺序（那会随配置书写顺序变，排障时极难看出来）。
+   *
+   * 单模型 TCB（`models.length < 2`）**不进索引** —— 没有可轮换的，
+   * 查不到就等于"用请求里原来那个模型"，与不装均衡器时一致。
+   *
+   * @returns 索引。**每次调用重建** —— 规模只有几个 TCB，而换来的是
+   *   "改了 `data/tcb.json` 立刻生效"（不必重启或清缓存）。
+   */
+  groups(): ReadonlyMap<string, readonly ModelConfig[]> {
+    const index = new Map<string, readonly ModelConfig[]>()
+    for (const id of [...this.catalog.tcbs.keys()].sort()) {
+      const tcb = this.catalog.tcbs.get(id)
+      if (tcb === undefined || tcb.models.length < 2) continue
+      for (const candidate of tcb.models) {
+        const key = `${candidate.provider}/${candidate.model}`
+        const existing = index.get(key)
+        if (existing === undefined || tcb.models.length > existing.length) index.set(key, tcb.models)
+      }
+    }
+    return index
   }
 
   /**

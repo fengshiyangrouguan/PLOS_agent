@@ -106,6 +106,10 @@ const REGISTERED_TOOLS = [
   'qq_read',
   'qq_search',
   'qq_wait_message',
+  // ★ 第 1 批（2026-10-15）：群管理 ＋ 申请处理
+  'qq_set_group_ban',
+  'qq_approve_friend',
+  'qq_approve_group',
 ] as const
 
 /**
@@ -670,6 +674,157 @@ export function apply(ctx: Context, config: Config): void {
             })),
           })),
         }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ★ 第 1 批（2026-10-15）：群管理 ＋ 申请处理
+  //
+  // ★ 全部经 `ctx.qq.call(action, params)` —— 类型由 `ActionMap` 约束 ✓
+  //   （动作名拼错会被类型挡住 ✓，见 `qq/protocol/index.ts` ✓）。
+  //
+  // ★★ **必须写 `output.schema`** ✓ —— 它是**结果类型的来源**：
+  //   不写的话 `defineTool` 把结果推成 **`never`** ✗ ⇒ 报
+  //   `Type '…' is not assignable to '… => Promise<never>'`（实测踩过**两次** ✗）。
+  //   ★ 而 `required` 是**逐字段**写的（`{ type: 'boolean', required: true }` ✓），
+  //   **不是** JSON-Schema 那个 `required: [...]` 数组 ✗ —— 照 `qq_chats` 抄的 ✓。
+  //
+  // ⚠️ **上下文成本**：每多一个工具，**每个请求**都要多带一份 schema ✗ ——
+  //   而瓶颈是 **TPM**（硅基 L0：100,000，一条请求约 40,000 令牌 ✓）
+  //   ⇒ 工具**分批上、能合就合** ✓
+  // ══════════════════════════════════════════════════════════════════════
+
+  ctx.tools.register(defineTool({
+    name: 'qq_set_group_ban',
+    description:
+      'Mute someone in a QQ group, or lift a mute. duration is in seconds; '
+      + 'pass 0 to lift a mute. Pass user_id "all" to mute the whole group.',
+    parameters: {
+      target: { type: 'string', required: true, description: 'Group, as "group:<id>".' },
+      user_id: {
+        type: 'string',
+        description: 'QQ number of the member to mute, or "all" for the whole group.',
+      },
+      duration: { type: 'number', description: 'Seconds. 0 lifts the mute.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+          muted: { type: 'string' },
+          duration: { type: 'number' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? (value.duration === 0 ? `Lifted the mute on ${value.muted}.` : `Muted ${value.muted} for ${value.duration}s.`)
+          : `Mute failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      const target = parseTarget(args.target)
+      if (target === undefined || target.kind !== 'group') {
+        return { ok: false, reason: `target must be "group:<id>", got "${args.target}"` }
+      }
+      const raw = String(args.user_id ?? '').trim()
+      const user: number | 'all' = raw === 'all' ? 'all' : Number(raw)
+      if (user !== 'all' && !Number.isFinite(user)) {
+        return { ok: false, reason: `user_id must be a QQ number or "all", got "${raw}"` }
+      }
+      const duration = Math.max(0, Math.trunc(args.duration ?? 0))
+      try {
+        await ctx.qq.call('set_group_ban', { group_id: Number(target.id), user_id: user, duration })
+        return { ok: true, muted: user === 'all' ? 'all' : String(user), duration }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_approve_friend',
+    description:
+      'Approve or reject a QQ friend request. The flag comes from the friend-request '
+      + 'notification you received (it looks like "u_...").',
+    parameters: {
+      flag: { type: 'string', required: true, description: 'The request flag.' },
+      approve: { type: 'boolean', description: 'true to accept, false to reject.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+          approved: { type: 'boolean' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? (value.approved === false ? 'Friend request rejected.' : 'Friend request approved.')
+          : `Friend request failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      try {
+        await ctx.qq.call('set_friend_add_request', {
+          flag: String(args.flag),
+          approve: args.approve !== false,
+        })
+        return { ok: true, approved: args.approve !== false }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_approve_group',
+    description:
+      'Approve or reject a QQ group join request, or accept a group invitation. '
+      + 'The flag comes from the request notification you received (it looks like "slreq:..."). '
+      + 'sub_type is "add" when someone asks to join, "invite" when you were invited.',
+    parameters: {
+      flag: { type: 'string', required: true, description: 'The request flag.' },
+      approve: { type: 'boolean', description: 'true to accept, false to reject.' },
+      sub_type: { type: 'string', description: '"add" or "invite". Optional.' },
+      reason: { type: 'string', description: 'Reason shown on rejection. Optional.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+          approved: { type: 'boolean' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? (value.approved === false ? 'Group request rejected.' : 'Group request approved.')
+          : `Group request failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      try {
+        await ctx.qq.call('set_group_add_request', {
+          flag: String(args.flag),
+          approve: args.approve !== false,
+          ...args.sub_type === undefined ? {} : { sub_type: String(args.sub_type) },
+          ...args.reason === undefined ? {} : { reason: String(args.reason) },
+        })
+        return { ok: true, approved: args.approve !== false }
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }
       }

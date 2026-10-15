@@ -73,6 +73,15 @@ async function withTimeout<T>(promise: Promise<T | undefined>, ms: number): Prom
  * @param ctx - 解析上下文。
  * @returns 已解析的图片段。
  */
+/**
+ * 图片描述**拿不到**时的占位文本。
+ *
+ * ★ **导出它**：`qq/signals` 要用它判断"这条消息里有没有还没描述出来的图"
+ * （据此决定要不要等一会儿再补看一次）。让两个文件靠**同一个字面量**耦合是脆的 ——
+ * 改一处忘另一处就静默失效（补看永远不触发，而且没有任何报错）。
+ */
+export const IMAGE_MISSING = '(加载失败)'
+
 async function resolveImage(data: Record<string, unknown>, ctx: ResolveContext): Promise<ResolvedImage> {
   // OneBot 用 `sub_type === 1` 表示动画表情；也可能是字符串 "1"。
   const rawSubType = data['sub_type']
@@ -103,7 +112,7 @@ async function resolveImage(data: Record<string, unknown>, ctx: ResolveContext):
   return {
     kind: 'image',
     sticker,
-    description: missing ? '(加载失败)' : description,
+    description: missing ? IMAGE_MISSING : description,
     failed: false,
   }
 }

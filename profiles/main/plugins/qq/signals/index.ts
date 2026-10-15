@@ -56,8 +56,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import type { QqIncoming } from '../adapter/index.ts'
 import { conversationOf, parseConversation } from '../adapter/buffer.ts'
+// ★ 「描述拿不到」那个占位文本 —— **从渲染它的地方导出**，别在这里再写一遍字面量
+//   （两个文件靠同一个字面量耦合是脆的：改一处忘另一处就静默失效）。
+import { IMAGE_MISSING } from '../pipeline/segments.ts'
 import { offer } from '../wait.ts'
 import type { Signal } from '../../perception/types.ts'
 
@@ -66,6 +70,29 @@ export const name = 'qq-signals'
 
 /** 需要的能力：QQ（取消息）、感知（注册信号源）、数据库（存档）。 */
 export const inject = ['qq', 'perception', 'db']
+
+/** 配置。 */
+export interface Config {
+  /**
+   * 等图片描述落定的窗口（毫秒）—— **到期就是终态**。
+   *
+   * 唤醒**不等归档**，而 VLM 那次调用实测 **1.2~38.5 秒**、且有 10 秒超时
+   * （`vlm2text.config.timeoutMs`）⇒ 第一次渲染常常带着 `(加载失败)`。
+   * 超时**没有中止**那次调用（是 `Promise.race`），所以它会跑完并写缓存 ——
+   * 于是等这个窗口之后用 `render(…, { fresh: true })` 重看，就能拿到真描述，
+   * 并**再唤醒她一次**（模板 `imageReady`：`【图片已渲染完成】`）。
+   *
+   * ★ 进 `Config` 而不是常量：它是**部署可变**的，而且"多久算拿不到"
+   * 直接决定她多久之后才看到图。
+   */
+  imageReadyWaitMs: number
+}
+
+/** 配置 schema。 */
+export const Config: z<Config> = z.object({
+  // 60 秒：比实测最坏那次（38.5 秒）宽，又不至于让她等太久。
+  imageReadyWaitMs: z.natural().default(60_000),
+})
 
 /** `@` 白羽的优先级。 */
 const PRIORITY_MENTION = 20
@@ -153,8 +180,22 @@ function nameOf(last: QqIncoming | undefined, fallback: string): string {
  * @param ctx - 插件上下文。
  * @returns 信号列表。
  */
-function collect(ctx: Context): Signal[] {
+function collect(ctx: Context, ready: Map<string, string>): Signal[] {
   const signals: Signal[] = []
+
+  // ★ **描述补上了的那几条** —— 数据是**渲染好的那条消息**与**会话 id**。
+  //
+  //   一次性：**取走即清**（下一次拉取不该再提同一件事）。
+  for (const [conversation, text] of ready) {
+    ready.delete(conversation)
+    signals.push({
+      kind: 'imageReady',
+      source: conversation,
+      priority: PRIORITY_PRIVATE,
+      data: { conversation, text },
+    })
+  }
+
   for (const conversation of ctx.qq.conversations()) {
     const unread = ctx.qq.unread(conversation)
     if (unread === 0) continue
@@ -199,7 +240,7 @@ function collect(ctx: Context): Signal[] {
  * 装好存档与信号源。
  * @param ctx - 插件上下文。
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config): void {
   // ── ★ ② 信号拉：`priority > 0` 的信号**产生自己的唤醒** ─────────────
   //
   //   ★ 这是感知的**两根轴**里被漏掉的那一根（另一根是闲时定时拉）：
@@ -233,11 +274,58 @@ export function apply(ctx: Context): void {
     if (wakeTimer !== undefined) clearTimeout(wakeTimer)
   })
 
+  // ★ 待告知表：会话 → **渲染好的那条消息**。`collect` **取走即清**。
+  const ready = new Map<string, string>()
+
+  /**
+   * 那张图**稍后**拿到描述了吗 —— 拿到就**再唤醒一次**。
+   *
+   * ## 为什么需要它
+   *
+   * 唤醒**不等归档**（`wake` 与 `archive` 并行），而 VLM 那次调用实测 **1.2 ~ 38.5 秒**、
+   * 且有 **10 秒超时**（`vlm2text.config.timeoutMs`）⇒ 第一次渲染常常带着
+   * `(加载失败)` 归档。
+   *
+   * ★ **超时那一刻并没有中止那次调用**（超时是 `Promise.race`，不是 `abort`）——
+   * 所以它会**跑完并写缓存**。于是这里等一段时间后用
+   * `render(incoming, { fresh: true })` 重看：缓存命中就能拿到**真描述**。
+   *
+   * ## 判据
+   *
+   * ★ **变了才唤醒。** 没变说明还是没拿到（文本已经是 `(加载失败)`，不会更差），
+   * 叫醒她也是白叫。**到期就是终态**（用户定案）。
+   *
+   * @param incoming - 那条可能带图的入站消息。
+   */
+  const followUpImage = async (incoming: QqIncoming): Promise<void> => {
+    // 先看**已经渲染好的**那份（缓存命中，几乎不花钱）—— 没有待补的图就不必等。
+    const before = await ctx.qq.render(incoming)
+    if (!before.includes(IMAGE_MISSING)) return
+
+    await new Promise<void>((resolve) => { setTimeout(resolve, config.imageReadyWaitMs) })
+
+    // `fresh: true` ⇒ **丢掉解析缓存重解析**（不做的话 `resolveCache` 会把
+    // `(加载失败)` 那份钉住，重看永远等于 before）。
+    const after = await ctx.qq.render(incoming, { fresh: true })
+    if (after === before) return
+
+    ready.set(conversationOf(incoming), after)
+    wake()
+  }
+
   // ── 存档：每条消息进库（设计 §6.5「后台每一条都进库」）────────────
   ctx.on('qq/message', (incoming) => {
     void archive(ctx, incoming).catch((error: unknown) => {
       ctx.logger.warn(
         'qq-signals: 存档失败（不影响消息流转）：%o',
+        error instanceof Error ? error.message : String(error),
+      )
+    })
+    // ★ 补看：这一条里若有**还没描述出来的图**，稍后拿到描述时**再唤醒一次**
+    //   （模板 `imageReady`）。它**不影响**下面那次唤醒的时序。
+    void followUpImage(incoming).catch((error: unknown) => {
+      ctx.logger.warn(
+        'qq-signals: 补看图片描述失败（不影响消息流转）：%o',
         error instanceof Error ? error.message : String(error),
       )
     })
@@ -261,7 +349,10 @@ export function apply(ctx: Context): void {
       mention: '群「{name}（id:{id}）」里有人 @ 了你',
       private: '{sender}(id:{id}) 私聊了你',
       group: '群「{name}（id:{id}）」里有 {count} 条新消息',
+      // ★ 图片**稍后**才描述出来的那一次 —— 数据是**渲染好的那条消息**与**会话 id**。
+      //   自带理由，所以她看得出"为什么又被叫了一次"，而不是以为消息重复了。
+      imageReady: '【图片已渲染完成】{conversation} {text}',
     },
-    pull: () => collect(ctx),
+    pull: () => collect(ctx, ready),
   }))
 }

@@ -93,8 +93,19 @@ async function resolveImage(data: Record<string, unknown>, ctx: ResolveContext):
     mimeType: fetched.mimeType,
     sticker,
   }))
-  // 描述失败用固定占位，且**不入库**——实验期也是这个语义。
-  return { kind: 'image', sticker, description: description ?? '(解析失败)', failed: false }
+  // 描述拿不到就用固定占位，且**不入库**（描述缓存那边也不写失败）——
+  // 所以同一张图下次遇到会**自动重试**。
+  //
+  // ★ **`''` 也要算失败**：超时那条路返回的就是空串（`vlm2text` 的 `Promise.race`），
+  //   而 `??` 只认 `undefined` ⇒ 早先会渲染成**空描述**（`[图片]` 后面什么都没有）。
+  // ★ 措辞是「加载失败」（用户定案）：它也正好是 60 秒后台等待到期后的状态。
+  const missing = description === undefined || description === ''
+  return {
+    kind: 'image',
+    sticker,
+    description: missing ? '(加载失败)' : description,
+    failed: false,
+  }
 }
 
 /**

@@ -4,70 +4,45 @@
  * ## 为什么需要它（实测 2026-10-15）
  *
  * 硅基流动的限速**按模型**给，而官方文档明说 `DeepSeek R1` / `DeepSeek V3`
- * 这一类**限速是固定的**（花月消费也提不上去）。L0 档的实测数字：
+ * 这一类**限速是固定的**（花月消费也提不上去）。L0 档实测：
  *
  *     主模型 deepseek-ai/DeepSeek-V3.2   RPM 1,000   TPM **100,000**
  *     识图   Qwen/Qwen3-VL-…             RPM 1,000   TPM  **80,000**
  *
- * ★ **RPM 一千完全不是瓶颈，TPM 才是墙。** 而探针里量到的请求体约 **162 KB**
- * ⇒ 按 4 字符/令牌估，**一条请求约 40,000 令牌**：
+ * ★ **RPM 一千完全不是瓶颈，TPM 才是墙。** 探针量到请求体约 **162 KB**
+ * ⇒ 按 4 字符/令牌估，**一条约 40,000 令牌**：
  *
  *     100,000 ÷ 40,000 ≈ **每分钟 2.5 个请求**
  *
- * 而她的一个回合要发 5~10 条请求 ⇒ **必然撞墙**。撞墙之后的真实链条是：
+ * 而她的一个回合要发 5~10 条 ⇒ **必然撞墙**。撞墙之后：
  *
  *     429(code 50602) → pi-ai 退避重试 6 次（+1/2/5/7 秒）→ **放弃**
  *       探针原样：`消息=175` 连续 6 次、全 429；最后一次 11:33:44 之后
- *       **到 11:37:46 一个请求都没有**
- *       ⇒ 你那边看到「发了消息她半天不理」
- *       ⇒ 再发一条，新回合恰好赶上配额恢复 ⇒「再发一条就全收到了」
+ *       **到 11:37:46 一个请求都没有** ⇒「发了消息她半天不理」
  *
- * ## 两半，缺一不可
+ * ## 两半挂在**两个不同的 seam**（这一条是被真机故障逼出来的）
  *
- * | | 作用 |
- * |:--|:--|
- * | **限速** | 把请求**排在本地** ⇒ 慢一点，但**每次都成**（不再触发那条重试死路） |
- * | **均衡** | 限速是**按模型**算的 ⇒ **同族多模型 = TPM 直接翻倍** ⇒ 不牺牲速度 |
- *
- * ★ 单靠限速只能让她**变慢**；加上均衡才能"**保持响应速度的同时不被限速**"。
- *
- * ## 四条取舍
- *
- * | # | 取舍 | 理由 |
+ * | | seam | 为什么是它 |
  * |:--|:--|:--|
- * | 1 | 超预算**排队等**，不是拒绝 | 拒绝 = 又一次失败重试，正是病灶 |
- * | 2 | ★ **配额让给她**（`residentSessionId` 不排队） | VLM / planner / 快照都是后台的，不该挤掉"她在说话"那条路 |
- * | 3 | ★ **限速器自己出问题必须放行** | 与探针同一条纪律：**绝不许阻断出网** |
- * | 4 | 数字全进 `Config` | 限额**按账号档位**变，写死就是错的 |
+ * | **均衡（选模型）** | **`agent/request`** | ★ 它**就是**决定 `provider`/`model` 的地方（`tcb.apply` 在同一个瀑布里设 temperature），返回**覆盖字段**是这个 seam 的**文档化用法**；而且它**不需要知道是谁在问** |
+ * | **限速（排队等）** | **`llm/stream`** | ★ 它有 **`sessionId`** ⇒ 才能实现"配额让给她"。而它在这里**只推迟、绝不改写** |
  *
- * ## 模型组怎么给
+ * ⚠️ **第一版把两件都放在 `llm/stream` 里、并改写 `options.provider/model`** ——
+ * **那是错的，而且错得很贵**：真机上表现为「`attention: 已交付` 成功两次、
+ * VLM 两次调用都 200、**但主模型一条请求都没到网络**」⇒ 她醒了却不说话。
  *
- * `groups` 把**TCB 点名的那个模型**映射到它的**等价候选**：
+ * 从探针**一条记录都没有**（连失败的都没有）能看出：请求**在出网之前**就构造不出来。
+ * 根因是我把 `llm/stream` 的 `options` 当成可改的了 —— 那个先例
+ * （`account-routing` 的 `ctx.on('llm/stream', r => adapter.stream(r))`）是**换掉整个流**，
+ * **不是改 `options`**。DSH 的规矩也写着 **"new behavior goes on documented extension points"**。
  *
- * ```jsonc
- * "groups": {
- *   "siliconflow/deepseek-ai/DeepSeek-V3.2": [
- *     { "provider": "siliconflow", "model": "deepseek-ai/DeepSeek-R1" },
- *     { "provider": "siliconflow", "model": "deepseek-ai/DeepSeek-V3.2" },
- *     { "provider": "siliconflow", "model": "deepseek-ai/DeepSeek-V3" }
- *   ]
- * }
- * ```
+ * ## 模型组只配在 TCB 里
  *
- * ★ **组内必须可互换**：同一份 messages / tools 都得吃得下。不满足就会在
- * "换过去那一瞬间"报错，而且**看起来像模型坏了**。
+ * `data/tcb.json` 的 `models`（**第一个是默认**，后面轮换）是
+ * "某个 agent 用哪些模型"的**唯一真相源**；本插件读 `ctx.tcb.groups()`。
+ * 在插件里再写一份映射就是同一个事实两处，必然分叉。
  *
- * ⚠️ **按 `provider/model` 分桶** —— 硅基是**按模型**限速的，而我们的 `llm-pi-ai` 里
- * **VLM 与主模型共用同一个 provider 条目**，只按 provider 分会算错。
- *
- * ## 为什么改模型这件事是安全的
- *
- * `llm/stream` 的终端 `next()` 闭包捕获的是**同一个 `options` 对象**
- * （`llm/src/index.ts:1136-1141`）⇒ 在 `next()` 之前改 `options.model`，
- * 适配器用的就是改过的那个。
- *
- * ★ 而 **"模型可见 ⟺ 进 log"**：这次用的是哪个模型由 `request/header` 记下来 ✓
- * ⇒ 均衡**不破坏**"请求是 session log 的纯函数"。
+ * ★ **组内必须可互换**（同一份 messages / tools 都得吃得下）。
  *
  * @module llm-throttle
  */
@@ -79,7 +54,7 @@ import z from '@deepseek-ai/schemastery'
 /** 插件名。 */
 export const name = 'llm-throttle'
 
-/** 只要 `llm`（`llm/stream` 瀑布）与 `tcb`（**模型组的唯一来源**）。 */
+/** `llm`（限速：`llm/stream`）、`tcb`（模型组的唯一来源）。 */
 export const inject = ['llm', 'tcb']
 
 /** 一个桶（`provider/model`）的预算。 */
@@ -92,14 +67,6 @@ export interface BucketConfig {
   maxConcurrent: number
 }
 
-/** 一个候选模型。 */
-export interface Candidate {
-  /** provider 名（`llm-pi-ai` 的 providers 键）。 */
-  provider: string
-  /** 模型名。 */
-  model: string
-}
-
 /** 配置。 */
 export interface Config {
   /**
@@ -110,10 +77,12 @@ export interface Config {
    */
   enabled: boolean
   /**
-   * ★ 常驻会话（她）的 `sessionId`：**它不排队、也不换模型**。
+   * ★ 常驻会话（她）的 `sessionId`：**它不排队**。
    *
    * 配额紧张时先扣后台那几路（VLM / planner / 快照）——
    * 它们晚一点没关系，"她在说话"那条路晚一点就是"她不回人"。
+   *
+   * ★ 但她**照样参与均衡**（那是她不变慢的唯一手段）—— 优待只是"不排队"。
    */
   residentSessionId: string
   /** 默认桶（`buckets` 里没写到的模型用它）。 */
@@ -122,7 +91,7 @@ export interface Config {
   buckets: Record<string, BucketConfig>
   /** 被 429 拒过的模型**冷却多久**（毫秒）。 */
   cooldownMs: number
-  /** 单次排队的上限（毫秒）—— 超过就**放行**（宁可冒险，也不许把她卡死）。 */
+  /** 单次排队的上限（毫秒）—— 超过就**放行**（宁可冒险，也不许把人卡死）。 */
   maxWaitMs: number
 }
 
@@ -150,9 +119,8 @@ export const Config: z<Config> = z.object({
  * 估算一次请求的令牌数。
  *
  * 不求精确 —— 要的是**量级正确**（决定"这一分钟还能不能再塞一个"）。
- * 字符数 / 4 是常用粗估；TPM 预算本来就留余量。
  *
- * @param options - `llm/stream` 的载荷。
+ * @param options - 带 `messages` 的载荷。
  * @returns 估算的令牌数。
  */
 export function estimateTokens(options: { messages?: readonly unknown[] }): number {
@@ -166,7 +134,7 @@ export interface Offer {
   readonly key: string
   /** 要等多久才能发。 */
   readonly waitMs: number
-  /** 剩余余量（越大越宽裕），用于并列时的比较。 */
+  /** 剩余余量（0~1，越大越宽裕）。 */
   readonly headroom: number
   /** 是否在 429 冷却里。 */
   readonly cooling: boolean
@@ -175,7 +143,10 @@ export interface Offer {
 /**
  * 挑一个候选：**先排除在冷却里的，再取等得最少的，并列时取余量最大的**。
  *
- * **纯函数**（不碰时间源、不碰桶）⇒ 能离线自检。
+ * ★ **并列时保留最先的那个** ⇒ 没有理由时**不换模型**（第一个就是默认，
+ * 所以行为与不装均衡器时一致）。
+ *
+ * **纯函数** ⇒ 能离线自检。
  *
  * @param offers - 每个候选此刻的报价，顺序与候选列表一致。
  * @returns 选中的下标；空数组返回 `undefined`。
@@ -183,7 +154,7 @@ export interface Offer {
 export function pickBest(offers: readonly Offer[]): number | undefined {
   if (offers.length === 0) return undefined
   const warm = offers.map((offer, index) => ({ offer, index })).filter(entry => !entry.offer.cooling)
-  // ★ 全在冷却里 ⇒ **不挑等于不发**：退回到全部候选（宁可碰一次，也不要卡住她）。
+  // ★ 全在冷却里 ⇒ **不挑等于不发**：退回到全部候选（宁可碰一次，也不要卡住人）。
   const pool = warm.length > 0 ? warm : offers.map((offer, index) => ({ offer, index }))
   let best = pool[0]
   if (best === undefined) return undefined
@@ -226,7 +197,6 @@ export class Bucket {
     this.#prune(now)
 
     if (this.#inflight >= this.#config.maxConcurrent) {
-      // 并发满了：等一会儿再问（真正的等待由调用方的循环决定）。
       return { waitMs: 1_000, blockedBy: 'concurrency' }
     }
     if (this.#entries.length >= this.#config.perMinute) {
@@ -242,9 +212,7 @@ export class Bucket {
   }
 
   /**
-   * 这个桶还剩多少余量（0~1，越大越宽裕）。
-   *
-   * 用**剩余 TPM 比例**当余量 —— TPM 才是那堵墙（见模块注释）。
+   * 还剩多少余量（0~1）。用**剩余 TPM 比例** —— TPM 才是那堵墙。
    *
    * @param now - 当前时间（毫秒）。
    * @returns 0~1。
@@ -283,7 +251,7 @@ export class Bucket {
  * 这个失败是不是"被限速"。
  *
  * ⚠️ 是**启发式**：pi-ai 把适配器的错误归一成 `failure`，里面可能只有一段文本。
- * 认不出也只是**不冷却**（退化成纯轮转），不会更坏。
+ * 认不出只是**不冷却**（退化成纯轮转），不会更坏。
  *
  * @param failure - 归一化后的失败描述。
  * @returns 命中返回 true。
@@ -327,53 +295,66 @@ export function apply(ctx: Context, config: Config): void {
     return bucket
   }
 
+  // ── ① **均衡**：挂 `agent/request`（文档化的"决定用哪个模型"的 seam）────
+  //
+  //   返回**覆盖字段**是它的用法（`tcb.apply` 就在同一个瀑布里设 temperature）。
+  //   ★ 这里**不需要知道是谁在问** —— 所以它不碰 `sessionId`
+  //   （那正是它该待在 `agent/request` 而不是 `llm/stream` 的原因之一）。
+  ctx.on('agent/request', async (_payload, next) => {
+    const resolved = await next()
+    try {
+      const group = ctx.tcb.groups().get(keyOf(resolved.provider, resolved.model))
+      if (group === undefined || group.length < 2) return resolved
+
+      const now = Date.now()
+      const offers = group.map((candidate): Offer => {
+        const key = keyOf(candidate.provider, candidate.model)
+        const bucket = bucketFor(candidate.provider, candidate.model)
+        const at = cooling.get(key)
+        return {
+          key,
+          // 这里只需要"谁更宽裕"，用估算令牌 0 问（真正的预算在 `llm/stream` 扣）。
+          waitMs: bucket.check(0, now).waitMs,
+          headroom: bucket.headroom(now),
+          cooling: at !== undefined && now - at < config.cooldownMs,
+        }
+      })
+      const index = pickBest(offers)
+      if (index === undefined) return resolved
+      const picked = group[index]
+      if (picked === undefined) return resolved
+      if (picked.provider === resolved.provider && picked.model === resolved.model) return resolved
+
+      // ★★ **每次都记一行** —— 第一版失败时**一点痕迹都没有**，
+      //   那本身就是缺陷（因为"没发请求"和"发了但没记录"分不开）。
+      ctx.logger.info(
+        `llm-throttle: 均衡 ${keyOf(resolved.provider, resolved.model)} → ${keyOf(picked.provider, picked.model)}`
+        + `（余量 ${String(Math.round((offers[index]?.headroom ?? 0) * 100))}%）`,
+      )
+      return { ...resolved, provider: picked.provider, model: picked.model }
+    } catch (error) {
+      // ★★ 均衡器自己出问题 ⇒ **用原来的模型继续**（绝不阻断）。
+      ctx.logger.warn(
+        'llm-throttle: 均衡失败，用原模型继续：%o',
+        error instanceof Error ? error.message : String(error),
+      )
+      return resolved
+    }
+  })
+
+  // ── ② **限速**：挂 `llm/stream`，**只推迟、绝不改写** ─────────────────
   ctx.on('llm/stream', (options: GenerateOptions, next): AsyncIterable<StreamChunk> => {
     return (async function* (): AsyncIterable<StreamChunk> {
-      // ★★ **常驻会话（她）照样参与均衡。**
-      //
-      //   我第一版让她**整个跳过**了 —— 那是错的：用户要的正是
-      //   「**main** 同时使用 R1 / V3.2 / V3」，而**她一个回合发 5~10 条**、
-      //   是最容易撞 TPM 的那个 ⇒ **她才是最需要均衡的人**。
-      //
-      //   她得到的优待是**不排队**（下面那处），不是"不换模型"。
-      const isResident = options.sessionId === config.residentSessionId
-      const tokens = estimateTokens(options)
-
-      // ── ① 均衡：在等价候选里挑一个（没配组 ⇒ 只有自己）────────────
-      //
-      // ★★ **组从 TCB 读** —— 那是"某个 agent 用哪些模型"的**唯一真相源**。
-      //   在插件里再写一份映射就是同一个事实两处，必然分叉。
-      //   `groups()` 每次调用重建索引（只有几个 TCB），所以**改了 tcb.json 立刻生效**。
-      const group = ctx.tcb.groups().get(keyOf(options.provider, options.model))
-      const candidates: readonly Candidate[] = group ?? [{ provider: options.provider, model: options.model }]
-      let picked: Candidate = { provider: options.provider, model: options.model }
+      let tokens = 0
       try {
-        const now = Date.now()
-        const offers = candidates.map((candidate): Offer => {
-          const key = keyOf(candidate.provider, candidate.model)
-          const bucket = bucketFor(candidate.provider, candidate.model)
-          const at = cooling.get(key)
-          return {
-            key,
-            waitMs: bucket.check(tokens, now).waitMs,
-            headroom: bucket.headroom(now),
-            cooling: at !== undefined && now - at < config.cooldownMs,
-          }
-        })
-        const index = pickBest(offers)
-        if (index !== undefined) picked = candidates[index] ?? picked
+        tokens = estimateTokens(options)
       } catch {
-        // ★★ 均衡器出问题 ⇒ 用原来的模型继续（取舍 3）。
+        // 估不出来就算了 —— 当作 0 令牌，仍然会被 RPM 闸住。
       }
 
-      // ★ 换模型：`llm/stream` 的终端 `next()` 闭包捕获的是**同一个 options 对象**
-      //   （`llm/src/index.ts:1136-1141`）⇒ 在 `next()` 之前改就生效。
-      //   而"这次用了哪个模型"由 `request/header` 进 log ⇒ 不破坏可重放性。
-      options.provider = picked.provider
-      options.model = picked.model
-
-      // ── ② 限速：**她优先、不排队**；后台那几路排队等（取舍 1、2）────
-      const bucket = bucketFor(picked.provider, picked.model)
+      // ★★ **她优先、不排队**；后台那几路排队等。
+      const isResident = options.sessionId === config.residentSessionId
+      const bucket = bucketFor(options.provider, options.model)
       if (!isResident) {
         const deadline = Date.now() + config.maxWaitMs
         for (;;) {
@@ -384,33 +365,33 @@ export function apply(ctx: Context, config: Config): void {
             waitMs = verdict.waitMs
             blockedBy = verdict.blockedBy
           } catch {
-            // ★★ 限速器自己出问题必须放行（取舍 3）—— 绝不许阻断出网。
+            // ★★ 限速器自己出问题必须放行（绝不许阻断出网）。
             break
           }
           if (waitMs === 0) break
           if (Date.now() + waitMs > deadline) {
-            // 等太久了 ⇒ **放行**：宁可冒险，也不许把后台那几路卡死。
             ctx.logger.warn(
-              `llm-throttle: 排队超上限放行（${blockedBy ?? '?'}，${keyOf(picked.provider, picked.model)}）`,
+              `llm-throttle: 排队超上限放行（${blockedBy ?? '?'}，${keyOf(options.provider, options.model)}）`,
             )
             break
           }
+          ctx.logger.debug(
+            `llm-throttle: 排队 ${String(waitMs)}ms（${blockedBy ?? '?'}，${keyOf(options.provider, options.model)}）`,
+          )
           await sleep(waitMs)
         }
       }
 
-      // ★ **她也要计数** —— 不排队不等于不占额度。少算她那一份的话，
-      //   后台那几路会以为还有余量，于是**替她**把 429 招来。
+      // ★ **她也要计数** —— 不排队不等于不占额度。
       bucket.enter(tokens, Date.now())
       try {
-        // ── ③ 盯住流：429 ⇒ 把这个模型**关进冷却**，别马上再碰它 ────
         for await (const chunk of next()) {
+          // ★ 429 ⇒ 把这个模型**关进冷却**，别马上再碰它。
           if (chunk.type === 'finish' && chunk.reason !== undefined && chunk.reason.kind === 'error') {
-            const failure = chunk.reason.failure
-            if (isRateLimited(failure)) {
-              cooling.set(keyOf(picked.provider, picked.model), Date.now())
+            if (isRateLimited(chunk.reason.failure)) {
+              cooling.set(keyOf(options.provider, options.model), Date.now())
               ctx.logger.warn(
-                `llm-throttle: ${keyOf(picked.provider, picked.model)} 被限速，冷却 ${String(config.cooldownMs)}ms`,
+                `llm-throttle: ${keyOf(options.provider, options.model)} 被限速，冷却 ${String(config.cooldownMs)}ms`,
               )
             }
           }

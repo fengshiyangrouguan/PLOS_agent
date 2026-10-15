@@ -31,7 +31,7 @@ import { renderSegments } from '../pipeline/render.ts'
 import { resolveMessage } from '../pipeline/segments.ts'
 // ★ **出站反解析**：正文里的 `[表情：X]` / `[未知表情:ID]` 要还原成 `face` 段 ✓
 //   （表与反查都在 `pipeline/face.ts` ✓ —— 那是"表情映射"的唯一落点 ✓）。
-import { parseOutgoingFaces } from '../pipeline/face.ts'
+import { FACE_EXAMPLES, parseOutgoingFaces } from '../pipeline/face.ts'
 import { FrameCapture } from './capture.ts'
 import type { ImageDescriber, ResolveContext, ResolvedSegment } from '../pipeline/segment.ts'
 import {
@@ -647,9 +647,14 @@ export class QqAdapter extends Service {
     //   ★ 而**静默地发出去更糟** —— 她会以为发出去了 ✓ ⇒ 这里抛错，
     //     `qq_send_message` 会把 `Send failed: …` 回给她 ✓（她那就能自己改 ✓）。
     if (segments.length === 0) {
+      // ★★ **回传要给她看**（model-facing ✓）—— 不写文件名、不写内部概念 ✗。
+      //
+      //   她要的信息只有两条：**这个表情不存在** ＋ **能用的有哪些** ✓。
+      //   （早先那句里带着 `see qq/pipeline/face.ts…` ✗ —— 那是给开发者看的，
+      //     她会把它原样转述出来，而**依然不知道该怎么办** ✓。）
       throw new Error(
-        'nothing left to send: an emoji name that is not in the face table produces no segment'
-        + ' (see qq/pipeline/face.ts for the names it knows)',
+        `这个表情不存在。[表情：X] 里的 X 要用 QQ 的表情名，`
+        + `常用的是：${FACE_EXAMPLES}。（写错了或者名字不对，这一段就会被丢掉）`,
       )
     }
     return await this.sendSegments(target, segments)

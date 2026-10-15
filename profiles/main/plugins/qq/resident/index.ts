@@ -63,7 +63,15 @@ export const name = 'qq-resident'
  */
 // `sessionPersistence`：判"这个会话盘上有没有" —— 有就 `resume`（**只有它会打开写句柄**），
 // 没有才 `create`。缺了它就只能 create，会话永远是纯内存的（见下面那段注释）。
-export const inject = ['agents', 'agentLoop', 'agentDefaultModel', 'tcb', 'pointer', 'sessionPersistence']
+//
+// ★★ `sessions`：**首次 `create` 之后要显式 `flush` 一次**把它落到盘上
+//    （否则下次开机 `stat` 找不到它 ⇒ 又走 `create` ⇒ **永远进不了 `resume`**）。
+//    ⚠️ 缺了它不会不激活，而是**运行时**炸：
+//    `cannot get property "sessions" without inject` —— 实测踩过一次，
+//    表现是"会话文件只有开机那次的头、之后再不长" ✗
+export const inject = [
+  'agents', 'agentLoop', 'agentDefaultModel', 'tcb', 'pointer', 'sessionPersistence', 'sessions',
+]
 
 /** 配置。 */
 export interface Config {

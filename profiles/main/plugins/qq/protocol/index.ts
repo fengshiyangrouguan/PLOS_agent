@@ -171,7 +171,121 @@ export interface ActionMap {
   get_login_info: { params: Record<string, never>, result: LoginInfo }
   get_stranger_info: { params: { user_id: number }, result: StrangerInfo }
   get_group_member_list: { params: { group_id: number }, result: GroupMember[] }
-  set_group_ban: { params: { group_id: number, user_id: number, duration: number }, result: unknown }
+  /**
+   * ★ **禁言／解除／全体禁言** —— 一个动作覆盖三种情形。
+   *
+   * `user_id` 声明成 `number | 'all'`：★ **全体禁言就是传 `'all'`** ✓。
+   *
+   * 依据（SnowLuma 的 API schema，`config-ClrCrmAk.js`）：
+   * ```
+   * :1531  function groupUserAction(def) {
+   * :1534    user_id: f.**memberId()**.describe("QQ 号"),
+   * ```
+   * ★ 它用的是 **`memberId()`**，而 `comment_qzone` 的 `target_uin` 用的是 **`f.userId()`**
+   * —— **两个类型刻意分开** ✓ ⇒ 前者允许 `'all'`、后者是纯 uint ✓（OneBot 11 的约定 ✓）。
+   * 另外它**还**有一个等价的独立动作 `set_group_whole_ban`（`{enable}` → `muteAll` ✓）
+   * —— **我们不用它** ✓：一条路语义统一、少一个工具 ✓。
+   *
+   * `duration: 0` ⇒ **解除禁言** ✓（schema 里 `f.duration().default(1800)` ✓）。
+   */
+  set_group_ban: { params: { group_id: number, user_id: number | 'all', duration: number }, result: unknown }
+  /**
+   * 处理好友添加请求（通过／拒绝）。
+   *
+   * schema：`params: { flag: f.string({allowEmpty:false}), approve: f.bool().default(true) }` ✓
+   * `flag` 来自事件（`post_type=request` ✓），**不是** QQ 号 ✓。
+   */
+  set_friend_add_request: { params: { flag: string, approve: boolean }, result: unknown }
+  /**
+   * 处理加群请求（通过／拒绝）。
+   *
+   * schema：`{ flag, sub_type?, type?, approve = true, reason = "" }` ✓
+   * ★ `sub_type` 与 `type` 二者取一（内部 `p.sub_type ?? p.type ?? "add"` ✓）——
+   * `add` = 别人申请进群，`invite` = 有人邀我进群 ✓。
+   */
+  set_group_add_request: {
+    params: { flag: string, sub_type?: string, type?: string, approve: boolean, reason?: string }
+    result: unknown
+  }
+
+  // ── ★ QQ 空间（说说）──────────────────────────────────────────────
+  // 这一组是 **SnowLuma 的扩展**（OneBot 11 没有 ✓），全部照它的 schema 抄 ✓。
+
+  /**
+   * 发表说说。
+   *
+   * schema：`{ content(必填), images?, ugc_right(默认 1), target_uins? }` ✓
+   * ★ 约束也在 schema 里：`ugc_right ∈ {1,4,16,64,128}` ✓；
+   * **`16`／`128` 时 `target_uins` 必填** ✓（分别表示可见／不可见名单 ✓）。
+   */
+  send_qzone_msg: {
+    params: {
+      content: string
+      images?: readonly string[]
+      ugc_right?: number
+      target_uins?: readonly number[]
+    }
+    result: { tid?: string, [key: string]: unknown }
+  }
+  /** 评论说说（`tid` 来自 `get_qzone_msg_list`／`send_qzone_msg` ✓）。 */
+  comment_qzone: {
+    params: { tid: string, content: string, target_uin?: number, images?: readonly string[] }
+    result: unknown
+  }
+  /** 删除说说。 */
+  delete_qzone_msg: { params: { tid: string }, result: unknown }
+  /**
+   * 给说说点赞／取消赞。
+   *
+   * `abstime` 是**说说发表时间**（unix 秒 ✓）—— schema 说"传真实值更可靠" ✓。
+   */
+  like_qzone: { params: { tid: string, target_uin?: number, abstime?: number }, result: unknown }
+  unlike_qzone: { params: { tid: string, target_uin?: number, abstime?: number }, result: unknown }
+  /**
+   * 说说列表（`readOnly`）。
+   *
+   * ★ **`tid` 就是从这里来的** ✓（`msglist[].tid` ✓）—— 点赞／评论都要它 ✓。
+   */
+  get_qzone_msg_list: {
+    params: { target_uin?: number, pos?: number, num?: number }
+    result: { total?: number, msglist?: readonly QzoneMsg[], [key: string]: unknown }
+  }
+  /** 好友动态（`readOnly`）。★ `page_num` **只有首页可靠**（schema 明说深翻页要时间游标，暂未实现 ✓）。 */
+  get_qzone_feeds: {
+    params: { page_num?: number, count?: number }
+    result: { [key: string]: unknown }
+  }
+
+  // ── ★ 通知类（`readOnly`）──────────────────────────────────────────
+  /**
+   * ★★ **群系统消息** —— **加群申请**就从这里来 ✓。
+   *
+   * 返回数组，每项含 `group_id` / `group_name` / `request_id` / … ✓
+   * ★ 与事件那条路（`post_type=request` ✓）是**两条路**：事件是**实时**推送 ✓，
+   * 这个是**主动拉**（漏掉的能补 ✓）。
+   */
+  get_group_system_msg: {
+    params: Record<string, never>
+    result: readonly QqSystemMessage[]
+  }
+  /**
+   * ★ **可疑好友申请**（`readOnly`）——
+   * 只读、**不做处理**：配套的 `set_doubt_friends_add_request` 有风险，**不接** ✓。
+   *
+   * ★ `uid` 就是"回传作 `flag`"的那个 ✓（schema 原话 ✓）。
+   */
+  get_doubt_friends_add_request: {
+    params: Record<string, never>
+    result: readonly DoubtFriendRequest[]
+  }
+  /** 谁赞过我的资料卡。 */
+  get_profile_like: { params: Record<string, never>, result: { [key: string]: unknown } }
+  /** ★ 群禁言名单（还在禁言里的人 ✓）。 */
+  get_group_shut_list: {
+    params: { group_id: number }
+    result: readonly ShutMember[]
+  }
+
   /**
    * 取合并转发（聊天记录）的内容。
    *
@@ -187,6 +301,42 @@ export interface ActionMap {
    * 3. 实测 `{ id: token }` 也能用，但 `message_id` 是 OneBot 的正规拼写，取它。
    */
   get_forward_msg: { params: { message_id: string }, result: { messages: ForwardNode[] } }
+}
+
+/** `get_qzone_msg_list` 回来的一条说说。 */
+export interface QzoneMsg {
+  tid?: string
+  content?: string
+  created_time?: number
+  [key: string]: unknown
+}
+
+/** `get_group_system_msg` 回来的一条群系统消息（加群申请／邀请 ✓）。 */
+export interface QqSystemMessage {
+  group_id?: number
+  group_name?: string
+  request_id?: string
+  /** `invitation` / `add` … */
+  sub_type?: string
+  [key: string]: unknown
+}
+
+/** `get_doubt_friends_add_request` 回来的一条可疑好友申请。 */
+export interface DoubtFriendRequest {
+  /** ★ **回传作 `flag`** 用 ✓（schema 原话 ✓）。 */
+  uid?: string
+  user_id?: number
+  nick?: string
+  [key: string]: unknown
+}
+
+/** `get_group_shut_list` 回来的一条（还在禁言中的成员 ✓）。 */
+export interface ShutMember {
+  user_id?: number
+  nickname?: string
+  /** 禁言到期时间戳（秒 ✓）。 */
+  shut_up_time?: number
+  [key: string]: unknown
 }
 
 /**

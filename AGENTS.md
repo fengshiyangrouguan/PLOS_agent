@@ -82,6 +82,11 @@ adapter/buffer.ts:69    conversationOf()  ← 全仓唯一写 group:/private: �
 | ★ **运行时查别的服务** | **别在 `apply` 里立刻查。** 插件的激活序由**依赖满足**决定，**不是补丁层的行序** —— 在 `apply` 里马上 `ctx.llm.listModels(...)` 会拿到 `no adapter registered for provider "xxx"`，而那只说明**那个插件还没激活**（实测：同一个 provider 等 1.5~3 秒就就绪）。**这个假象和"配置没生效"长得一模一样**，会把人骗去改配置 |
 | ★ **临时运行时探针** | 写一个 `plugins/_probe-xxx.ts` ＋ 临时补丁行：它 `inject` 目标服务，**重试等待**到就绪，把结论 `appendFileSync` 到 `%TEMP%`，然后**用完就删**（连同补丁行）。这是"服务真的跑到了"之外的第二种确认 |
 | ★★ **`systemPrompt.assemble()` 的 scope** | **照 `assembleContextFor()` 的写法传 `{ agent, scope: agent }`** —— `scope` 要的是 **Agent 对象本身**，不是 `agent.scope`（`core/agent/src/dispatch.ts:174-176`）。传错层**不报任何错**，只会静默给出两个假象：① agent 注册的段落全变 **0 字** ② `tcb` 的 `sections` 白名单**看起来没生效**。**我为此误判过一次"人设没进提示词"，差点去改好的 `tcb.apply`** —— 而且"不带 scope"与"传 `agent.scope`"**犯的是同一个错**，拿它们互为对照会得出"两边一致 ⇒ 不是作用域问题"的错误结论。**探针的对照组必须有一组是真的走对的那条路** |
+| ★★ **强杀会撕坏会话帧** | 会话日志是**多帧 zstd**，撕在帧中间就是残帧，而**下次开机读它会报 `corrupt session log`**（`assertStoredIdentity` 要校验头）。实测：一晚 `Stop-Process -Force` 十几次之后，`session.v4.jsonl.zstd` 停在 **259 字节**、**再也不长**，而且**没有任何报错** —— 1632 个事件只在内存里，进程一停就没了。**别拿 `-Force` 当默认停机方式** |
+| ★★ **改 `sessionId` 要连文件头里的 `id` 一起改** | 路径与**头里的 `id`** 必须一致，否则 `assertStoredIdentity` 拒收 ⇒ **`dsh` 直接 `fatal load failure`、起不来**。只改目录名就是这个后果。**要么连头一起改（解帧 → 改 id → 重压），要么干脆从空会话重来** |
+| ★★ **`create` 出来的会话不落盘、也不报错** | 只有 **`resume`** 会「打开持久化会话以便写入」（`core/agent/src/index.ts:192-193`）。`create` 建的是**纯内存**会话：`sessions.flush()` **不报错也不写**（没有写句柄 ⇒ 无事可做 ⇒ 静默）。★ 而 `interrupt_plan` 的待办**只存 `sessionId + seq`**，指望 `session_event_read` 回去看原文 ⇒ **盘上没有，整条恢复路径就是断的**。★ 首次建出来的还要**显式 flush 一次**落个文件，否则下次开机 `stat` 找不到、永远进不了 `resume` |
+| ★★ **往模型组／白名单里写 id 之前，先在 provider catalog 里查它存不存在** | 我往 `main` 的 `models` 组里写了 `DeepSeek-R1` / `V3`，**而它们没在 `llm-pi-ai` 里声明** ⇒ 均衡换过去之后**那一轮在出网之前就死** ⇒ **她醒着却不回话，而且探针里连失败的记录都没有**。为此付了**两次**真机故障，而且两次都把原因错判到"架构缺一层"上 ✗。**一次 grep 就能避免** |
+| ★★ **两个"改请求"的 seam 分工不同** | `agent/request`（返回 `LlmCallConfig`）**才是"每个请求决定 `provider`/`model`"的那一层** —— 代码里的报错信息自己写着 *"or supply both via the `agent/request` waterfall"*（`core/agent-loop/src/agent.ts:581`）。而 **`llm/stream` 的 `options` 改不动**（适配器早就解析完了）⇒ 在那里改写 `options.model` 会让**日志与实际出网的不一致**、请求**构造不出来**。**在这两个 seam 上动手之前，先读这两处的代码** |
 
 ---
 

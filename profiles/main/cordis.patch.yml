@@ -74,6 +74,21 @@
           - id: deepseek-ai/DeepSeek-V3.2
             name: DeepSeek-V3.2
             maxTokens: 8192
+          # ★ **同族轮换候选** —— 均衡（`llm-throttle`）在 `data/tcb.json` 的
+          #   `main.models` 组里挑还有余量的那个。
+          #
+          # ★★ **必须在这里声明，否则均衡换了也白换**：模型 id 不在 provider catalog 里
+          #   就解析不出来 ⇒ 那一轮**在出网之前就死** ⇒ 她醒着却不回话
+          #   （实测 2026-10-15：我往组里写了 R1/V3 但没声明，两次真机故障都是这个）。
+          #
+          # 硅基的 `/models` 里这三个都存在（还有 `Pro/` 前缀的收费版，
+          # 那三个的限速可按月消费解锁 —— 想提额度走那条）。
+          - id: deepseek-ai/DeepSeek-R1
+            name: DeepSeek-R1
+            maxTokens: 8192
+          - id: deepseek-ai/DeepSeek-V3
+            name: DeepSeek-V3
+            maxTokens: 8192
           # planner：写待办那条"恰好一行"的小模型（`interrupt_plan` 的快照 subagent）。
           #
           # ## 关思考：`thinkingFormat: qwen` ＋ 声明 `reasoningEfforts`
@@ -110,12 +125,19 @@
           - id: Qwen/Qwen3.5-27B
             name: Qwen3.5-27B
             maxTokens: 512
+            # ★ **它收图**（用户查证：Qwen3.5-27B 是多模态模型）。
+            #
+            #   必须在这里声明才算数 —— `vlm2text` **不自己判断模态**，
+            #   模态的唯一真相是 provider catalog（`ctx.llm.resolveModelInfo()` 读的就是它）。
+            #   ★ 而它同时是**识图模型组**里的一个候选 ⇒ 不声明的话，
+            #   均衡把它换上去那一刻会失败，症状看起来像"模型坏了"。
+            input: ['text', 'image']
             compat:
               thinkingFormat: qwen
             reasoningEfforts:
               off:
               high: high
-          # VLM：★ 全仓唯一声明"这个模型收图"的地方。
+          # ★ **收图的模型都在这里显式声明 `input`** —— 这是全仓唯一声明模态的地方。
           # `contextWindow` 不写 ⇒ 用 defaultContextWindow。
           # 实测它**不吐 reasoning**（-Instruct 那一支才是 Thinking 版）。
           - id: Qwen/Qwen3-VL-32B-Instruct
@@ -491,9 +513,41 @@
     # 常驻 agent：进程一起来就建白羽的会话，让 QQ 那边随时有人可推。
     # headless 启动不创建 agent，没有这一行 qq-attention 会一直报"无人可推"。
     # greeting 从环境变量取（默认空 = 启动时不说话）。
+    #
+    # ★ `sessionId` **就是会话的存储键**（`sessions/<cwd>/<id>/` ＋
+    #   `storages/session_projcache/sessions/<id>.json`）—— 改它**等于开一个新会话**。
+    #   所以从旧代号改名时，旧的存储也跟着改名了，否则她会失忆。
+    #   名字用**中性代号**：git 跟踪的文件里不出现真实代号（见 `.gitignore` 那条同理）。
     - id: qq-resident
       name: './plugins/qq/resident/index.ts'
       config:
-        sessionId: plos-baiyu
+        sessionId: plos
         cwd: ''
         greeting: !!js "process.env.QQ_RESIDENT_GREETING ?? ''"
+
+    # ★ 出网自我限速 ＋ 同族模型均衡。
+    #
+    # 为什么必须开：硅基的限速**按模型**算，免费档主模型 TPM 只有 **100,000**，
+    # 而一条请求约 **40,000 令牌**（探针量到的 162 KB 请求体）⇒ **每分钟只够 2.5 条**，
+    # 而她的一个回合要发 5~10 条 ⇒ 必然撞 429 ⇒ 重试 6 次后**放弃** ⇒ 几分钟不理人。
+    #
+    # ★ **没有 Pro**（Pro 要月消费解锁，这条线路是用赠金的）⇒ 免费模型的限速是
+    #   **固定的** ⇒ **均衡是唯一能"不牺牲速度"的手段**：
+    #   三个同族模型各有独立 TPM ⇒ 3 × 100,000 ≈ **每分钟 8 条**（单模型只有 2.5 条）。
+    #
+    # ★★ **组里的模型 id 必须先在 `llm-pi-ai` 的 `siliconflow.models` 里声明** ——
+    #   否则均衡换了也白换：解析不出来的模型会让那一轮**在出网之前就死**、
+    #   她醒着却不回话（而且**探针里连失败的记录都没有**）。
+    #   实测 2026-10-15 两次真机故障都是这个原因，别再漏。
+    #
+    # ★★ **两半分挂两个 seam**：
+    #   · **均衡** → `agent/request`（代码里写着"or supply both via the agent/request
+    #     waterfall"，那就是"每请求决定模型"的那一层）
+    #   · **限速** → `llm/stream`（它有 `sessionId`，才能"配额让给她"；只推迟、不改写）
+    #
+    # ★ 常驻会话**不排队**（配额让给她），但**照样参与均衡**。
+    - id: llm-throttle
+      name: './plugins/llm_throttle/index.ts'
+      config:
+        enabled: true
+        residentSessionId: plos

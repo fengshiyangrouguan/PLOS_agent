@@ -359,7 +359,20 @@ export function apply(ctx: Context, config: Config): void {
           : (parseConversation(conversation)?.kind === 'private' ? PRIORITY_PRIVATE : PRIORITY_GROUP)
         try {
           const text = await ctx.qq.render(incoming)
-          if (ctx.perception.supplement('QQ', conversation, text, priority)) {
+          const parsed = parseConversation(conversation)
+          // ★★ **必须框**：同源补充进她那一轮的是**一句裸文本**，没有"谁发的、
+          //    这是聊天消息"这层 ⇒ 她会把它当成**指令去执行**。
+          //
+          //    实测（2026-10-15）：私聊里连说三次「停」，她把「停」当指令 ⇒
+          //    **不再调 `qq_send_message`** ⇒ 她写了三条"我已经停了"，
+          //    而**一条都没到 QQ** ✗✗（`assistant/message` 的正文**不会**到达对方，
+          //    只有工具会）。
+          //
+          //    框上之后，那条就该**回**（用工具 ✓），而不是**执行** ✗。
+          const framed = parsed === undefined
+            ? text
+            : `【QQ 新增消息】${incoming.senderName ?? '有人'}(id:${parsed.id}) 刚发来：\n${text}`
+          if (ctx.perception.supplement('QQ', conversation, framed, priority)) {
             // ★ **补即已读**（用户定案）：收下了就要 `drain`，否则下次 `pull()`
             //   会再带上它 ⇒ 她收到两遍。
             ctx.qq.drain(conversation)

@@ -80,6 +80,25 @@ export class VlmToText extends Service {
   private readonly config: Config
 
   /**
+   * ★ **单飞表**：同一张图**还没落定**时只调一次 VLM。
+   *
+   * 键直接用 **base64 ＋ MIME** —— 它本来就是"这张图是什么"的唯一标识，
+   * 不必再算一遍哈希（`describe.ts` 里那次哈希是给**缓存**用的，这里不需要）。
+   *
+   * ## 为什么需要它（实测 2026-10-15）
+   *
+   * 同一张图会被**两条路**各调一次：
+   *   · `qq/signals` 的 **归档**（`archive` → `render`）
+   *   · **她自己的读取**（`qq_read` → `render`）
+   * 两条路并行 ⇒ 两次调用可能都在跑（实测 VLM 单次 1.2~38.5 秒）⇒ **白花钱、白等**。
+   *
+   * ⚠️ 存的必须是**没被超时赛跑过的那个 promise**（`describeWithCache` 的完整 promise）——
+   * 这样第二个调用方**有自己的超时窗口**：第一个在 10 秒超时返回占位之后，
+   * 第二个仍可能等到描述落定 ✓（若存赛跑后的，第二个会立刻拿到空占位）。
+   */
+  private readonly inflight = new Map<string, Promise<string>>()
+
+  /**
    * @param ctx - 本插件的上下文。
    * @param config - 配置。
    */
@@ -123,15 +142,30 @@ export class VlmToText extends Service {
     //
     //   超时返回**空串** = 走 `describe.ts` 已有的"失败"那条路：不写缓存、
     //   渲染成 `[图片]`、下次同一张图自动重试 ✓
-    const full = describeWithCache({
-      cache: this.ctx.db.imageDescriptions,
-      call: (bytes, mediaType) => this.callVlm(bytes, mediaType),
-      now: () => Date.now(),
-      log: (level, message) => {
-        if (level === 'warn') this.ctx.logger.warn(message)
-        else this.ctx.logger.debug(message)
-      },
-    }, input)
+    // ★ **单飞**：这张图若**已经在调**，就搭同一趟车，别再调一次。
+    //
+    //   两条路会同时要同一张图的描述（`signals` 的归档 ＋ 她自己的 `qq_read`），
+    //   而 VLM 单次实测 1.2~38.5 秒 ⇒ 不去重就是白花钱、白等。
+    //
+    //   ⚠️ 存进去的是**没被赛跑过的那个 promise**：第二个调用方因此有**自己的超时窗口**
+    //   （第一个 10 秒超时返回占位之后，第二个仍可能等到描述落定）。
+    const key = `${input.mimeType}:${input.base64}`
+    let full = this.inflight.get(key)
+    if (full === undefined) {
+      full = describeWithCache({
+        cache: this.ctx.db.imageDescriptions,
+        call: (bytes, mediaType) => this.callVlm(bytes, mediaType),
+        now: () => Date.now(),
+        log: (level, message) => {
+          if (level === 'warn') this.ctx.logger.warn(message)
+          else this.ctx.logger.debug(message)
+        },
+      }, input)
+      this.inflight.set(key, full)
+      // 落定就摘（成功失败都摘）—— 成功的结果归**缓存**管，这里只管"在飞的"。
+      // `describeWithCache` 永不抛错，`.catch` 只是防御。
+      void full.finally(() => { this.inflight.delete(key) }).catch(() => { /* 不会发生 */ })
+    }
 
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<string>((resolve) => {

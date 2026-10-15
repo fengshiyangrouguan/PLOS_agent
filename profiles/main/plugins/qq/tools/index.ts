@@ -115,6 +115,10 @@ const REGISTERED_TOOLS = [
   'qq_qzone_post',
   'qq_qzone_comment',
   'qq_qzone_like',
+  // ★ 第 3 批（2026-10-15）：好友动态 ＋ 群系统消息 ＋ 禁言名单
+  'qq_qzone_feeds',
+  'qq_group_requests',
+  'qq_group_muted',
 ] as const
 
 /**
@@ -1012,6 +1016,159 @@ export function apply(ctx: Context, config: Config): void {
           ...args.target_uin === undefined ? {} : { target_uin: Number(args.target_uin) },
         })
         return { ok: true, liked: args.unlike !== true }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ★ 第 3 批（2026-10-15）：好友动态 ＋ 群系统消息 ＋ 禁言名单
+  //
+  // ★ 照配方写 ✓：必填参数逐字段 `required: true` ✓；`output` 同时有
+  //   `schema` 和 `render` ✓；数组用 `items` ＋ 对象 schema ✓。
+  // ══════════════════════════════════════════════════════════════════════
+
+  ctx.tools.register(defineTool({
+    name: 'qq_qzone_feeds',
+    description:
+      'Read your QQ friends\' Qzone timeline (好友动态). '
+      + 'Only the first page is reliable; deeper pages are not supported yet.',
+    parameters: {
+      page_num: { type: 'number', description: 'Page number, starting at 1. Default 1.' },
+      count: { type: 'number', description: 'Items per page. Default 10.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+          // ⚠️ 协议端这个返回体是**不透明对象**（字段没实测过 ✗）——
+          //    所以先原样给 JSON ✓，**等抓一次真实返回再收紧** ✓
+          //    （照 Todo 6 那条教训：不猜字段名 ✗）。
+          feedsJson: { type: 'string' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? (value.feedsJson ?? '(empty)')
+          : `Qzone feeds failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      try {
+        const result = await ctx.qq.call('get_qzone_feeds', {
+          ...args.page_num === undefined ? {} : { page_num: Number(args.page_num) },
+          ...args.count === undefined ? {} : { count: Number(args.count) },
+        })
+        return { ok: true, feedsJson: JSON.stringify(result) }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_group_requests',
+    description:
+      'Read pending QQ group system messages (加群申请 / 群邀请). '
+      + 'Use this to catch requests that arrived earlier; live ones also arrive as notifications.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+          requests: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                groupId: { type: 'string', required: true },
+                groupName: { type: 'string', required: true },
+                subType: { type: 'string', required: true },
+                requestId: { type: 'string', required: true },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? `${String(value.requests?.length ?? 0)} pending group requests.`
+          : `Group requests failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute() {
+      try {
+        const result = await ctx.qq.call('get_group_system_msg', {})
+        const requests = (result ?? []).map(item => ({
+          groupId: String(item.group_id ?? ''),
+          groupName: String(item.group_name ?? ''),
+          subType: String(item.sub_type ?? ''),
+          requestId: String(item.request_id ?? ''),
+        }))
+        return { ok: true, requests }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_group_muted',
+    description: 'List the members of a QQ group who are still muted.',
+    parameters: {
+      target: { type: 'string', required: true, description: 'Group, as "group:<id>".' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+          muted: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                userId: { type: 'string', required: true },
+                nickname: { type: 'string', required: true },
+                until: { type: 'number', required: true },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? `${String(value.muted?.length ?? 0)} members are muted.`
+          : `Muted list failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      const target = parseTarget(args.target)
+      if (target === undefined || target.kind !== 'group') {
+        return { ok: false, reason: `target must be "group:<id>", got "${args.target}"` }
+      }
+      try {
+        const result = await ctx.qq.call('get_group_shut_list', { group_id: Number(target.id) })
+        const muted = (result ?? []).map(item => ({
+          userId: String(item.user_id ?? ''),
+          nickname: String(item.nickname ?? ''),
+          until: Number(item.shut_up_time ?? 0),
+        }))
+        return { ok: true, muted }
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }
       }

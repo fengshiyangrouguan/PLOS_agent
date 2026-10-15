@@ -87,6 +87,11 @@ adapter/buffer.ts:69    conversationOf()  ← 全仓唯一写 group:/private: �
 | ★★ **`create` 出来的会话不落盘、也不报错** | 只有 **`resume`** 会「打开持久化会话以便写入」（`core/agent/src/index.ts:192-193`）。`create` 建的是**纯内存**会话：`sessions.flush()` **不报错也不写**（没有写句柄 ⇒ 无事可做 ⇒ 静默）。★ 而 `interrupt_plan` 的待办**只存 `sessionId + seq`**，指望 `session_event_read` 回去看原文 ⇒ **盘上没有，整条恢复路径就是断的**。★ 首次建出来的还要**显式 flush 一次**落个文件，否则下次开机 `stat` 找不到、永远进不了 `resume` |
 | ★★ **往模型组／白名单里写 id 之前，先在 provider catalog 里查它存不存在** | 我往 `main` 的 `models` 组里写了 `DeepSeek-R1` / `V3`，**而它们没在 `llm-pi-ai` 里声明** ⇒ 均衡换过去之后**那一轮在出网之前就死** ⇒ **她醒着却不回话，而且探针里连失败的记录都没有**。为此付了**两次**真机故障，而且两次都把原因错判到"架构缺一层"上 ✗。**一次 grep 就能避免** |
 | ★★ **两个"改请求"的 seam 分工不同** | `agent/request`（返回 `LlmCallConfig`）**才是"每个请求决定 `provider`/`model`"的那一层** —— 代码里的报错信息自己写着 *"or supply both via the `agent/request` waterfall"*（`core/agent-loop/src/agent.ts:581`）。而 **`llm/stream` 的 `options` 改不动**（适配器早就解析完了）⇒ 在那里改写 `options.model` 会让**日志与实际出网的不一致**、请求**构造不出来**。**在这两个 seam 上动手之前，先读这两处的代码** |
+| ★★ **加工具时 `defineTool` 有两处硬要求** | ① **必填参数要逐字段写 `required: true`** —— ⚠️ 这与 JSON-Schema 的 `required: [...]` 数组**不是一回事**（这里是**逐字段** ✓）。不写 ⇒ `args.x` 被当成 `string \| undefined` ⇒ `TS2345`。② **`output` 必须同时有 `schema` 和 `render(args, value) => ContentBlock[]`** ⇒ 只写 `schema` 报 `TS2741`；**两个都不写**则结果类型被推成 **`never`** ⇒ `Type '…' is not assignable to '… => Promise<never>'`（**实测：一次加 10 个工具全挂在这一条上，来回失败两次、两次都得 `git checkout` 回退** ✗）。★ **对照模板：`qq_recall_message`（最短最干净）** —— 加工具前先读它 |
+
+> ★ **上面那条的教训比它本身更重要**：两次失败都源于"只读了工具的**结尾**"（`execute` 的 `return`），
+> 而关键全在**开头** —— 这正是 §一 那条「**改任何东西之前，先读已有的同类实现**」，
+> 而我在**同一轮里犯了两次** ✗。
 
 ---
 

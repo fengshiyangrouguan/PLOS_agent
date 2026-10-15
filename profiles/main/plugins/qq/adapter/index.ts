@@ -29,6 +29,9 @@ import { Config as ConfigSchema, type Config } from './config.ts'
 import { MessageBuffer } from './buffer.ts'
 import { renderSegments } from '../pipeline/render.ts'
 import { resolveMessage } from '../pipeline/segments.ts'
+// ★ **出站反解析**：正文里的 `[表情：X]` / `[未知表情:ID]` 要还原成 `face` 段 ✓
+//   （表与反查都在 `pipeline/face.ts` ✓ —— 那是"表情映射"的唯一落点 ✓）。
+import { parseOutgoingFaces } from '../pipeline/face.ts'
 import { FrameCapture } from './capture.ts'
 import type { ImageDescriber, ResolveContext, ResolvedSegment } from '../pipeline/segment.ts'
 import {
@@ -623,7 +626,18 @@ export class QqAdapter extends Service {
         segments.push({ type: 'text', data: { text: ' ' } })
       }
     }
-    if (text !== '') segments.push({ type: 'text', data: { text } })
+    // ★★ **出站反解析**：把正文里的 `[表情：X]` 还原成 `face` 段 ✓。
+    //
+    //   为什么必须做：她看到的入站形态是 `[表情：笑哭]` ✓（`faceToText` 渲染的 ✓），
+    //   所以她写回来时也是这个形态 ✓ ⇒ 不还原的话，**对方收到的是一串方括号** ✗。
+    //
+    //   ★ 表里查不到的表情**整段丢掉**（用户定案）—— 发一个不存在的表情名没有意义 ✓，
+    //     而当普通文本发出去更糟 ✗。判据与切分规则都在 `parseOutgoingFaces` 里 ✓。
+    for (const part of parseOutgoingFaces(text)) {
+      segments.push(part.kind === 'face'
+        ? { type: 'face', data: { id: part.id } }
+        : { type: 'text', data: { text: part.text } })
+    }
     return await this.sendSegments(target, segments)
   }
 

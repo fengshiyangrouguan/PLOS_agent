@@ -202,3 +202,79 @@ export const FACE_TEXT_TO_ID: Readonly<Record<string, string>> = (() => {
   }
   return table
 })()
+
+/**
+ * 出站切分出来的一段：**一段纯文本**或**一个表情**。
+ *
+ * ★ 刻意是**中立形状**（不认识 OneBot 的 `Segment`）—— `face.ts` 属于渲染层，
+ * 不该认识协议类型 ✓；由 adapter 把它翻译成 `face` 段 ✓。
+ */
+export type OutgoingPart =
+  | { readonly kind: 'text', readonly text: string }
+  | { readonly kind: 'face', readonly id: string }
+
+/**
+ * ★★ **出站反解析**：把展示文本切回"文本 ＋ 表情"。
+ *
+ * 与 {@link faceToText} **互为逆** —— 那条路让模型看到 `[表情：笑哭]`，
+ * 这条路把她写的 `[表情：笑哭]` 还原成可发送的表情 ✓。
+ * （`face.ts` 的模块注释里那句"同时被出站还原复用"说的就是它 ✓。）
+ *
+ * ## 认两种形态
+ *
+ * | 写法 | 处理 |
+ * |:--|:--|
+ * | `[表情：笑哭]` | 查 {@link FACE_TEXT_TO_ID} ✓ |
+ * | `[未知表情:237]` | ★ **直接用那个 id** —— `faceToText` 的兜底自带 id ✓，说明她**说出了**是哪个表情，只是名字不在表里 ⇒ **比丢掉好得多** ✓ |
+ *
+ * ## ★ 都不认就**整段丢掉**（用户定案）
+ *
+ * 发一个表里没有的表情名没有意义 ✓；而**把它当普通文本发出去更糟** ✗
+ * —— 对方会收到一串方括号 ✓。
+ *
+ * @param text - 她写的正文。
+ * @returns 切好的段。**相邻文本已合并、空段不产出** ✓。
+ */
+export function parseOutgoingFaces(text: string): OutgoingPart[] {
+  const parts: OutgoingPart[] = []
+  // 两段式：`表情：` 走查表，`未知表情:` 自带 id 直接认。
+  const pattern = /\[(表情：|未知表情:)([^\]]*)\]/g
+  let cursor = 0
+
+  /**
+   * 并入一段纯文本（空串跳过；与上一段文本合并）。
+   *
+   * @param value - 要并入的文本。
+   */
+  const pushText = (value: string): void => {
+    if (value === '') return
+    const last = parts.at(-1)
+    if (last !== undefined && last.kind === 'text') {
+      parts[parts.length - 1] = { kind: 'text', text: last.text + value }
+      return
+    }
+    parts.push({ kind: 'text', text: value })
+  }
+
+  for (const match of text.matchAll(pattern)) {
+    const at = match.index ?? 0
+    const whole = match[0]
+    const tag = match[1]
+    const body = match[2] ?? ''
+    pushText(text.slice(cursor, at))
+    cursor = at + whole.length
+
+    if (tag === '未知表情:') {
+      if (/^\d+$/.test(body.trim())) parts.push({ kind: 'face', id: body.trim() })
+      continue
+    }
+    // ★ 容忍多余空格（老表里有 `[表情： 嘘]` 那种瑕疵，她可能照抄出带空格的形态）。
+    const id = FACE_TEXT_TO_ID[`[表情：${body.trim()}]`]
+    // ★ 表里没有 ⇒ 这里什么都不产出 ⇒ **整段消失** ✓（前后文本照旧接上 ✓）。
+    if (id !== undefined) parts.push({ kind: 'face', id })
+  }
+
+  pushText(text.slice(cursor))
+  return parts
+}
+

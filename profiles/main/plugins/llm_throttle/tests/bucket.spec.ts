@@ -5,7 +5,7 @@
  * 也不会因为机器慢而变成偶发失败。
  */
 
-import { Bucket, estimateTokens } from '../index.ts'
+import { Bucket, estimateTokens, isRateLimited, pickBest } from '../index.ts'
 
 let passed = 0
 let failed = 0
@@ -78,6 +78,36 @@ function check(label: string, actual: unknown, expected: unknown): void {
   bucket.leave()
   bucket.leave()
   check('多余的 leave 不会把计数压成负数', bucket.check(10, 0).waitMs, 0)
+}
+
+// ── 均衡：在等价候选里挑一个 ────────────────────────────────────────
+{
+  /** 造一个报价。 */
+  const offer = (key: string, waitMs: number, headroom = 0, cooling = false) => ({ key, waitMs, headroom, cooling })
+
+  check('空列表 ⇒ undefined（没得挑）', pickBest([]), undefined)
+  check('都可用 ⇒ 取不用等的那个', pickBest([offer('a', 5), offer('b', 0)]), 1)
+  check('★ 冷却里的先排除', pickBest([offer('a', 0, 0, true), offer('b', 3)]), 1)
+  check(
+    '★★ 全在冷却 ⇒ 退回全部（宁可碰一次，也不许把她卡住）',
+    pickBest([offer('a', 0, 0, true), offer('b', 3, 0, true)]),
+    0,
+  )
+  check('★ 等得一样多时取余量大的', pickBest([offer('a', 2, 0.1), offer('b', 2, 0.9)]), 1)
+  check('单个候选就是它自己', pickBest([offer('only', 9)]), 0)
+}
+
+// ── 限速识别（**启发式**：认不出只是不冷却，不会更坏）────────────────
+{
+  check('认 429', isRateLimited({ message: '429 status code (no body)' }), true)
+  check(
+    '认硅基的 50602',
+    isRateLimited({ message: '{"code":50602,"message":"Request was rejected due to rate limit"}' }),
+    true,
+  )
+  check('认 rate limit 字样', isRateLimited({ message: 'Rate Limit exceeded' }), true)
+  check('★ 别的错不误判（否则好模型也被关冷却）', isRateLimited({ message: '400 status code (no body)' }), false)
+  check('undefined 不炸', isRateLimited(undefined), false)
 }
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

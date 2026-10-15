@@ -265,7 +265,28 @@ export class Attention extends Service {
   private onNotice(notice: PerceptionNotice): void {
     if (notice.signals.length === 0) return
     this.queue.push(notice)
+    this.attempt()
+  }
 
+  /**
+   * 试一次投递**队首**。
+   *
+   * ★★ **两个触发源都要调它**：
+   *
+   * | 触发 | 含义 |
+   * |:--|:--|
+   * | `perception/notice` | 有新东西进来了 |
+   * | `agent/status → idle` | **她刚空下来** —— 这个曾经**没有** |
+   *
+   * ★ 缺第二个的后果（实测，真 QQ）：她忙的时候条目进队列，之后**没有任何东西会来取它** ——
+   * 队列要等下一条 `perception/notice` 才被重新看一眼。表现是
+   * 「**发了消息她半天不理，我再说一句就全收到了**」（因为 `pull()` 返回的是**当前状态**，
+   * 那次通知把两条一起带上了）。
+   *
+   * ⚠️ `agent/status` 每次 turn 结束都会来一次，所以**开头必须先判空队列** ——
+   * 否则每次 turn 结束都白跑一次 `targetAgent()`。
+   */
+  private attempt(): void {
     const peeked = this.queue.peek()
     if (peeked === undefined) return
 
@@ -298,7 +319,7 @@ export class Attention extends Service {
   }
 
   /**
-   * 构造完成之后运行：订阅感知条目。
+   * 构造完成之后运行：订阅感知条目**与她的忙闲**。
    *
    * 监听器**自己包 try/catch** —— cordis 的 `emit` 用 `Array.map`，
    * 一个监听器抛错会饿死后面的（`LlmRuntime` 源码里有这条注释）。
@@ -315,7 +336,25 @@ export class Attention extends Service {
         )
       }
     })
-    yield off
+
+    // ★ **她空下来时再试一次队列** —— 与 `interrupt_plan` 那处同构
+    //   （那边早就订了 `agent/status → idle` 来投递待办，`attention` 一直缺）。
+    const offIdle = this.ctx.on('agent/status', ({ status }) => {
+      if (status !== 'idle') return
+      try {
+        this.attempt()
+      } catch (error) {
+        this.ctx.logger.warn(
+          'attention: 空闲时投递队列失败：%o',
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+    })
+
+    yield () => {
+      off()
+      offIdle()
+    }
   }
 }
 

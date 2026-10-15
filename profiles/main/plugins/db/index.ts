@@ -48,7 +48,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { migrate } from './schema.ts'
-import { ImageDescriptionStore, InterruptPlanStore, MessageStore, PerceptionStore } from './stores.ts'
+import { ConversationStore, ImageDescriptionStore, InterruptPlanStore, MessageStore, PerceptionStore } from './stores.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -84,6 +84,17 @@ export class Db extends Service {
   readonly imageDescriptions: ImageDescriptionStore
 
   /**
+   * ★★ **会话元信息**（群／私聊通用 ✓）—— 从 `messages` 表推出来 ✓。
+   *
+   * 为什么需要它：**通知帧里只有 `group_id`、没有群名** ✗（实测 ✓）——
+   * 而感知层的模板到处要用 `{name}` ✓，而**渲染器取不到字段会抛错** ✓
+   * （`perception/render.ts:74` ✓）。★ 所以要用的人得先能问出名字 ✓。
+   *
+   * ⚠️ 名字**可能没有**（她从没在那儿说过话 ✓）⇒ 兜底是**用的人**的责任 ✓。
+   */
+  readonly conversations: ConversationStore
+
+  /**
    * 原始句柄。给需要写自定义查询的领域用（比如将来的记忆 / 媒体表）。
    * 大部分调用方应该用上面四个 store。
    */
@@ -112,6 +123,7 @@ export class Db extends Service {
     this.perception = new PerceptionStore(handle)
     this.interruptPlans = new InterruptPlanStore(handle)
     this.imageDescriptions = new ImageDescriptionStore(handle)
+    this.conversations = new ConversationStore(handle)
   }
 
   /**

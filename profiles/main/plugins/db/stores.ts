@@ -283,6 +283,101 @@ export interface PerceptionRow {
  * 注意 `pulled` 是**感知层是否拉过**，不是模型是否读过 ——
  * 模型层的已读语义由领域自己的读游标管（设计 §4.7）。
  */
+/**
+ * 一个会话的元信息。
+ *
+ * ★★ **通用**：群与私聊一视同仁 ✓（`type` 是**数据**，不是两套接口 ✓）——
+ * 这正是仓库分层规矩要的形状：平台分叉只许出现在 adapter / protocol ✓。
+ */
+export interface ConversationInfo {
+  /** 会话 id，形如 `group:123` / `private:456`（写法只由 `adapter/buffer.ts` 决定 ✓）。 */
+  readonly id: string
+  /** 会话类型（`group` / `private` …）。 */
+  readonly type: string
+  /**
+   * ★ 会话名 —— **可能没有** ✓（她从没在那儿说过话 ⇒ 库里就没有名字 ✓）。
+   *
+   * ⚠️ **这个字段刻意保留 `undefined`，不编造兜底值** ✓ ——
+   * 「拿不到名字时显示什么」是**用的人**的事 ✓（比如感知层要填 `群<id>` ✓），
+   * store 只负责**如实回答"有没有"** ✓。编造了别人就分不出真假了 ✗。
+   */
+  readonly name?: string
+  /** 该会话最近一条消息的时间（unix 秒）。 */
+  readonly lastTime: number
+}
+
+/**
+ * 会话元信息 —— 从**已有的 `messages` 表**里推出来，**不建新表** ✓。
+ *
+ * ★ 数据早就在了（`conversation_name` 是 `messages` 的列 ✓），少的只是查询接口 ✓。
+ * 用的是 `idx_messages_conv_time (conversation_id, time)` 那个索引 ✓。
+ */
+export class ConversationStore {
+  readonly #db: DatabaseSync
+
+  /**
+   * @param db - 原始句柄（由 `Db` 持有 ✓）。
+   */
+  constructor(db: DatabaseSync) {
+    this.#db = db
+  }
+
+  /**
+   * 按会话 id 拿元信息。
+   *
+   * @param id - 会话 id（`group:123` / `private:456` ✓）。
+   * @returns 元信息；**库里没有这个会话时给 `undefined`** ✓（不是空对象 ✗）。
+   */
+  get(id: string): ConversationInfo | undefined {
+    const row = this.#db.prepare(
+      `SELECT conversation_id AS id, conversation_type AS type, MAX(time) AS lastTime
+         FROM messages WHERE conversation_id = ? GROUP BY conversation_id`,
+    ).get(id) as { id: string, type: string, lastTime: number } | undefined
+    if (row === undefined) return undefined
+
+    // 名字单独取：**最近一条非空**的名字 ✓（群名可能改过 ⇒ 取最新的 ✓）。
+    const named = this.#db.prepare(
+      `SELECT conversation_name AS name FROM messages
+        WHERE conversation_id = ? AND conversation_name IS NOT NULL AND conversation_name <> ''
+        ORDER BY time DESC LIMIT 1`,
+    ).get(id) as { name: string } | undefined
+
+    return {
+      id: row.id,
+      type: row.type,
+      lastTime: row.lastTime,
+      ...named === undefined ? {} : { name: named.name },
+    }
+  }
+
+  /**
+   * 最近有活动的会话（按最后一条消息的时间倒序 ✓）。
+   *
+   * @param limit - 最多几条（默认 20 ✓）。
+   * @returns 元信息数组。
+   */
+  recent(limit = 20): readonly ConversationInfo[] {
+    const rows = this.#db.prepare(
+      `SELECT conversation_id AS id, conversation_type AS type, MAX(time) AS lastTime
+         FROM messages GROUP BY conversation_id ORDER BY lastTime DESC LIMIT ?`,
+    ).all(limit) as unknown as { id: string, type: string, lastTime: number }[]
+    const named = this.#db.prepare(
+      `SELECT conversation_name AS name FROM messages
+        WHERE conversation_id = ? AND conversation_name IS NOT NULL AND conversation_name <> ''
+        ORDER BY time DESC LIMIT 1`,
+    )
+    return rows.map(row => {
+      const hit = named.get(row.id) as { name: string } | undefined
+      return {
+        id: row.id,
+        type: row.type,
+        lastTime: row.lastTime,
+        ...hit === undefined ? {} : { name: hit.name },
+      }
+    })
+  }
+}
+
 export class PerceptionStore {
   readonly #db: DatabaseSync
 

@@ -86,6 +86,33 @@ declare module '@deepseek-ai/cordis' {
 /**
  * 注意力分配器，注册为 `ctx.attention`。
  */
+/**
+ * ★★ **该不该把它补进她正跑的那一轮**（同源补充的判断）。
+ *
+ * **纯函数**（不碰 agent、不碰时间、不碰队列）⇒ 能离线自检。
+ *
+ * 两条判据都要满足：
+ *
+ *   1. ★ **同源**：这条消息的会话 == **她这一轮被唤醒的那个会话**。
+ *      这正是必须记 `currentSource` 的原因 —— **优先级说不出是哪个会话** ✗
+ *   2. **不更高级**：更高级的东西**可能要中断她**，那是 `planTransfer` 那条路的事，
+ *      不是"补一句"
+ *
+ * @param current - 她当前这一轮的基准；`undefined` = 没有正在跑的一轮。
+ * @param source - 这条消息所属会话。
+ * @param priority - 这条消息的优先级。
+ * @returns 该补返回 `true`。
+ */
+export function shouldSupplement(
+  current: { readonly source: string | undefined, readonly priority: number } | undefined,
+  source: string,
+  priority: number,
+): boolean {
+  if (current?.source === undefined) return false
+  if (current.source !== source) return false
+  return priority <= current.priority
+}
+
 export class Attention extends Service {
   static Config: z<Config> = ConfigSchema
 
@@ -306,9 +333,12 @@ export class Attention extends Service {
    * @returns 接下了返回 `true`（调用方**不要**再 `wake()`）；不接返回 `false`。
    */
   supplement(domain: string, source: string, text: string, priority: number): boolean {
-    if (this.currentSource === undefined || this.currentSource !== source) return false
-    // 更高级的东西走正常那条路（它可能要中断她，不是"补一句"）。
-    if (priority > this.currentPriority) return false
+    const accept = shouldSupplement(
+      { source: this.currentSource, priority: this.currentPriority },
+      source,
+      priority,
+    )
+    if (!accept) return false
     const agent = this.targetAgent()
     if (agent === undefined) return false
 
@@ -321,6 +351,12 @@ export class Attention extends Service {
       content: [{ type: 'text', text }],
       source: { kind: 'perception', domain },
     }))
+    // ★ 记一行 —— 没有它，"补进去了"与"根本没走这条路"在日志上分不开，
+    //   而这个功能**默认不可见**（她那边只表现为"一次答全了"）。
+    this.ctx.logger.info(
+      `attention: 同源补充（${source}，priority=${String(priority)}，`
+      + `基准=${String(this.currentPriority)}，${String(text.length)} 字）`,
+    )
     return true
   }
 

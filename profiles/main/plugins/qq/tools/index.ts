@@ -227,7 +227,7 @@ export function apply(ctx: Context, config: Config): void {
             : 'Waited, but nobody spoke.',
       }],
     },
-    async execute(args) {
+    async execute(args, exec) {
       const target = parseTarget(args.target)
       if (target === undefined) {
         return { ok: false, reason: `invalid target "${args.target}", expected "group:<id>" or "private:<id>"` }
@@ -237,7 +237,9 @@ export function apply(ctx: Context, config: Config): void {
         config.waitMaxSeconds,
         Math.max(1, Math.trunc(args.seconds ?? config.waitDefaultSeconds)),
       )
-      const spoke = await beginWait(args.target, seconds * 1000)
+      // ★ **把取消信号传下去。** 她那一轮被取消时，等待者必须从表里消失 ——
+      //   否则下一条消息会被短路**吃掉**（既不唤醒、也不回传）。见 `../wait.ts`。
+      const spoke = await beginWait(args.target, seconds * 1000, exec.signal)
       if (!spoke) return { ok: true, spoke: false }
       // ★ **回传即已读** —— `drain` 而不是 `peek`；这一步就是"她把这段读掉了"。
       //   唤醒已被短路（那条消息没产生信号），所以**只有这里会消费它** —— 不会重复交付。

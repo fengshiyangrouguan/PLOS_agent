@@ -70,22 +70,50 @@ export function offer(conversation: string): boolean {
  *
  * @param conversation - 会话 id。
  * @param timeoutMs - 最多等多久（调用方负责夹到上限内）。
- * @returns `true` = 有消息来了；`false` = 超时，没人说话。
+ * @param signal - **她那一轮的取消信号**（`defineTool` 的 `exec.signal`）。
+ *   ★★ **必须传** —— 见下面那段注释。
+ * @returns `true` = 有消息来了；`false` = 超时**或被取消**，都没人说话。
  */
-export function beginWait(conversation: string, timeoutMs: number): Promise<boolean> {
-  // 同一会话前一个等待者先收掉 —— 否则它会永远挂着（`offer` 只唤醒第一个）。
+export function beginWait(conversation: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+  // 同一会话前一个等待者先收掉 —— 否则它会一直挂到自己的超时（`offer` 只唤醒一个）。
   waiting.delete(conversation)
   return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => {
-      waiting.delete(conversation)
-      resolve(false)
-    }, timeoutMs)
-    waiting.set(conversation, {
-      onMessage: () => {
-        clearTimeout(timer)
-        resolve(true)
-      },
-    })
+    let done = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    /** 收尾：清定时器、摘监听、**摘掉自己**。只生效一次。 */
+    const finish = (value: boolean): void => {
+      if (done) return
+      done = true
+      if (timer !== undefined) clearTimeout(timer)
+      // 只在自己**仍是当前那个**等待者时才摘 —— 否则会把后来者的登记抹掉。
+      if (waiting.get(conversation) === self) waiting.delete(conversation)
+      signal?.removeEventListener('abort', onAbort)
+      resolve(value)
+    }
+
+    const self: Waiter = { onMessage: () => { finish(true) } }
+    const onAbort = (): void => { finish(false) }
+
+    timer = setTimeout(() => { finish(false) }, timeoutMs)
+
+    // ★★★ **等待者必须随她那一轮的取消而消失。**
+    //
+    //   不管取消的话，等待者会留在表里；下一条消息到达时 `offer` 会**认领它** ——
+    //   可那时**已经没有人 await 这个 promise 了**（她那一轮没了）⇒
+    //   **既不唤醒、也不回传** ⇒ 那条消息被**吃掉**。
+    //
+    //   这是加这个工具时漏掉的**第三态**（前两态是"有消息"与"超时"）。
+    //   症状上它和"延迟"能分开：延迟会回，**这个完全不回**。
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        finish(false)
+        return
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+
+    waiting.set(conversation, self)
   })
 }
 

@@ -98,6 +98,28 @@ async function sleep(ms: number): Promise<void> {
   check('队列是空的', waitingCount(), 0)
 }
 
+// ── ★★ 她那一轮被取消 → 等待者必须**立刻消失** ──────────────────────
+{
+  const controller = new AbortController()
+  const waiting = beginWait('private:6', 5_000, controller.signal)
+  check('取消前它在等', isWaiting('private:6'), true)
+
+  controller.abort()
+  check('★★ 取消后等待者立刻消失（不等超时）', isWaiting('private:6'), false)
+  check('★ 取消让它以 false 收场，不是挂着', await waiting, false)
+
+  // ★★ 这一条才是这个修复的意义：此后消息**照常走唤醒**，不会被 offer 吃掉。
+  check('★★ 取消后 offer 不再认领它（那条消息会正常唤醒她）', offer('private:6'), false)
+}
+
+// ── 传进来就已经取消的信号：压根不该登记 ─────────────────────────────
+{
+  const controller = new AbortController()
+  controller.abort()
+  check('已取消 → 立刻 false', await beginWait('private:7', 5_000, controller.signal), false)
+  check('而且没有留下等待者', isWaiting('private:7'), false)
+}
+
 await sleep(1)
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

@@ -113,7 +113,17 @@ export class VlmToText extends Service {
    * @returns 一句话描述；任何失败都返回空串（调用方据此渲染 `[图片]`）。
    */
   async describe(input: DescribeInput): Promise<string> {
-    return describeWithCache({
+    // ★★ **超时不是 abort，而是"先还占位、让整条路继续跑完"。**
+    //
+    //   `describeWithCache` 本来就以**写缓存**结尾，所以只要**让这个 promise 活着**，
+    //   它跑完就会把描述写进缓存 ⇒ 第二阶段用 `render(…, { fresh: true })` 重渲染
+    //   就能命中缓存、拿到真描述 ⇒ 那次「【图片已渲染完成】」的唤醒才**有物可等**。
+    //
+    //   （早先这里是 `AbortController` 超时即中止，**那就永远等不到"好了"**。）
+    //
+    //   超时返回**空串** = 走 `describe.ts` 已有的"失败"那条路：不写缓存、
+    //   渲染成 `[图片]`、下次同一张图自动重试 ✓
+    const full = describeWithCache({
       cache: this.ctx.db.imageDescriptions,
       call: (bytes, mediaType) => this.callVlm(bytes, mediaType),
       now: () => Date.now(),
@@ -122,6 +132,17 @@ export class VlmToText extends Service {
         else this.ctx.logger.debug(message)
       },
     }, input)
+
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<string>((resolve) => {
+      timer = setTimeout(() => { resolve('') }, this.config.timeoutMs)
+    })
+    try {
+      return await Promise.race([full, timeout])
+    } finally {
+      // 只清定时器，**不动 `full`** —— 它要继续跑完才会写缓存。
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 
   /**
@@ -160,20 +181,17 @@ export class VlmToText extends Service {
     }
 
     const assembler = new BlockAssembler()
-    // ★ **超时**（见 `config.ts` 的 `timeoutMs`）：实测同一份请求 1.2~38.5 秒，
-    //   而唤醒不等归档 ⇒ 超时按**失败**处理（`describe.ts` 会因此**不写缓存**、
-    //   不抛错、渲染成 `[图片]`）⇒ 她**立刻**被唤醒、知道有人发了图。
-    //   后台那次仍会跑完并写缓存，好在稍后再唤醒一次（【图片已渲染完成】）。
-    const controller = new AbortController()
-    const timer = setTimeout(() => {
-      controller.abort(new Error(`VLM 超时（${String(this.config.timeoutMs)}ms）`))
-    }, this.config.timeoutMs)
-    try {
-      for await (const chunk of this.ctx.llm.stream({ ...options, signal: controller.signal })) {
-        assembler.push(chunk)
-      }
-    } finally {
-      clearTimeout(timer)
+    // ⚠️ **这里刻意不设超时、也不 abort。**
+    //
+    // 超时发生在**上一层**（`describe` 用 `Promise.race`）：那里超时后**提前返回占位**，
+    // 而**这一次调用继续跑完并写缓存** —— 那正是第二阶段
+    // （`render(…, { fresh: true })` ⇒ 缓存命中 ⇒ 真描述 ⇒ 【图片已渲染完成】）成立的前提。
+    //
+    // 曾经这里是 `AbortController` 超时即 `abort()`。**那是错的**：被中止的调用
+    // **永远不会有"好了"** ⇒ 第二次唤醒无物可等。（我还在提交信息里写了
+    // "后台那次仍会跑完并写缓存" —— 与 abort 直接矛盾。）
+    for await (const chunk of this.ctx.llm.stream(options)) {
+      assembler.push(chunk)
     }
 
     const finish = assembler.finish

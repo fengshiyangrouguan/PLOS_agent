@@ -727,10 +727,20 @@ export class QqAdapter extends Service {
 
   /**
    * 解析并渲染成 LLM 友好文本。
+   *
    * @param incoming - 入站消息。
+   * @param options - `fresh: true` ⇒ **先丢掉这条消息的解析缓存再重解析**。
+   *
+   *   ★ **为什么需要这个口子**：图片描述有**超时**（`vlm2text.config.timeoutMs`），
+   *   超时那次渲染出来的是占位；而**占位会被 `resolveCache` 缓存住** ⇒
+   *   描述稍后落定时再渲染，**拿到的还是占位** ⇒
+   *   「【图片已渲染完成】」那条第二次唤醒就完全失去意义。
+   *   所以那一头必须能**明确地要一份新的**，而不是靠"缓存刚好过期"。
+   *
    * @returns 可直接放进上下文窗口的文本。
    */
-  async render(incoming: QqIncoming): Promise<string> {
+  async render(incoming: QqIncoming, options?: { readonly fresh?: boolean }): Promise<string> {
+    if (options?.fresh === true) this.resolveCache.delete(incoming.messageId)
     return renderSegments(await this.resolve(incoming))
   }
 

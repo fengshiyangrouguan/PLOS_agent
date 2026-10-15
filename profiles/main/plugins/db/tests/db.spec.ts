@@ -237,7 +237,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   const ttl = 24 * 60 * 60 * 1000
 
   const id = store.insert({
-    sessionId: 'plos-baiyu', turn: 7, seq: 123, priority: 20,
+    sessionId: 'plos', turn: 7, seq: 123, priority: 20,
     what: '正在写 M5 的接线', why: '群里有人 @ 我', ttlMs: ttl,
   }, 1000)
   check('插入返回 id', id, 1)
@@ -255,7 +255,7 @@ function msg(id: string, time: number, content: string, conversationId = 'group:
   check('★ 新写的就在"待投递"里', store.list('pending').map(r => r.id), [id])
 
   const second = store.insert({
-    sessionId: 'plos-baiyu', turn: 9, seq: 140, priority: 80,
+    sessionId: 'plos', turn: 9, seq: 140, priority: 80,
     what: '在回私聊', why: '终端要修 bug', ttlMs: ttl,
   }, 2000)
   check('时间降序', store.list().map(r => r.turn), [9, 7])

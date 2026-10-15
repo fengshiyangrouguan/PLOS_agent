@@ -71,11 +71,11 @@ function checkBad(label: string, raw: unknown, pattern: RegExp): void {
 /** 一份最小的合法目录。 */
 function sample(): unknown {
   return {
-    default: 'baiyu',
+    default: 'plos',
     tcbs: {
-      baiyu: {
+      plos: {
         model: { provider: 'deepseek-official', model: 'deepseek-flash', temperature: 0.9 },
-        identity: 'data/identity/baiyu.md',
+        identity: 'data/identity/plos.md',
         sections: ['deployment:persona-prefix', 'tool:pwsh'],
       },
       reasoner: {
@@ -91,14 +91,14 @@ function sample(): unknown {
   const result = parseCatalog(sample())
   check('合法目录解析成功', result.ok, true)
   if (result.ok) {
-    check('默认 id', result.catalog.defaultId, 'baiyu')
-    check('两个 TCB', [...result.catalog.tcbs.keys()], ['baiyu', 'reasoner'])
+    check('默认 id', result.catalog.defaultId, 'plos')
+    check('两个 TCB', [...result.catalog.tcbs.keys()], ['plos', 'reasoner'])
     check('模型字段照 LlmCallConfig',
-      result.catalog.tcbs.get('baiyu')?.model,
+      result.catalog.tcbs.get('plos')?.model,
       { provider: 'deepseek-official', model: 'deepseek-flash', temperature: 0.9,
         reasoningEffort: undefined, maxTokens: undefined, stop: undefined })
-    check('人设路径', result.catalog.tcbs.get('baiyu')?.identity, 'data/identity/baiyu.md')
-    check('白名单原样', result.catalog.tcbs.get('baiyu')?.sections,
+    check('人设路径', result.catalog.tcbs.get('plos')?.identity, 'data/identity/plos.md')
+    check('白名单原样', result.catalog.tcbs.get('plos')?.sections,
       ['deployment:persona-prefix', 'tool:pwsh'])
     check('空白名单合法（一个段落都不给）', result.catalog.tcbs.get('reasoner')?.sections, [])
     check('没有 identity 也是合法的', result.catalog.tcbs.get('reasoner')?.identity, undefined)
@@ -109,7 +109,7 @@ function sample(): unknown {
 {
   const result = parseCatalog(sample())
   if (result.ok) {
-    check('省略 id 用默认', resolveTcb(result.catalog)?.id, 'baiyu')
+    check('省略 id 用默认', resolveTcb(result.catalog)?.id, 'plos')
     check('指定 id', resolveTcb(result.catalog, 'reasoner')?.id, 'reasoner')
     check('不存在的 id → undefined（不静默退回默认）',
       resolveTcb(result.catalog, '不存在'), undefined)
@@ -144,7 +144,7 @@ function sample(): unknown {
   // ★ 最容易犯的错：default 指向一个不存在的 TCB
   const danglingDefault = {
     default: 'typo',
-    tcbs: { baiyu: { model: { provider: 'p', model: 'm' }, sections: [] } },
+    tcbs: { plos: { model: { provider: 'p', model: 'm' }, sections: [] } },
   }
   checkBad('★ default 指向不存在的 TCB', danglingDefault, /默认 TCB "typo" 不在/)
 }

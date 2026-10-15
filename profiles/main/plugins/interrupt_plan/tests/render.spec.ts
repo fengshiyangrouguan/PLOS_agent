@@ -98,9 +98,9 @@ function checkTrue(label: string, actual: boolean): void {
 
 // ── writerTaskFor 把坐标接上去（**不接 why**） ──────────────────────
 {
-  const task = writerTaskFor({ sessionId: 'plos-baiyu', turn: 7, seq: 42 })
+  const task = writerTaskFor({ sessionId: 'plos', turn: 7, seq: 42 })
   checkTrue('task 保留指令原文', task.includes(WRITER_TASK))
-  checkTrue('task 给出会话 id', task.includes('plos-baiyu'))
+  checkTrue('task 给出会话 id', task.includes('plos'))
   checkTrue('task 给出轮号', task.includes('第 7 轮'))
   checkTrue('task 给出 seq（给工具的坐标）', task.includes('seq=42'))
   checkTrue('★ task 里没有 why —— 它不该绕模型一圈', !task.includes('@ 了你'))
@@ -140,7 +140,7 @@ function checkTrue(label: string, actual: boolean): void {
 
 // ── renderPlan：★ 过期就不注入 ─────────────────────────────────────
 {
-  const coordinates = { sessionId: 'plos-baiyu', turn: 7, seq: 42 }
+  const coordinates = { sessionId: 'plos', turn: 7, seq: 42 }
   const draft = { what: '正在改 attention', why: '群里有人 @ 了她' }
   const now = 1_000_000_000_000
 
@@ -160,7 +160,7 @@ function checkTrue(label: string, actual: boolean): void {
 {
   const now = 1_000_000_000_000
   const text = renderPlan({
-    sessionId: 'plos-baiyu',
+    sessionId: 'plos',
     turn: 7,
     seq: 42,
     what: '正在改 attention',
@@ -173,7 +173,7 @@ function checkTrue(label: string, actual: boolean): void {
   const body = text ?? ''
   checkTrue('★ 含"在做什么"', body.includes('正在改 attention'))
   checkTrue('★ 含"被打断的原因"', body.includes('群里有人 @ 了她'))
-  checkTrue('★ 含 sessionId 坐标', body.includes('plos-baiyu'))
+  checkTrue('★ 含 sessionId 坐标', body.includes('plos'))
   checkTrue('★ 含 turn 坐标（人说的"轮"就是 turn）', body.includes('第 7 轮'))
   checkTrue('★ 含 seq 坐标（给 session_event_read 用的那把钥匙）', body.includes('seq=42'))
   checkTrue('★ 告诉她用哪个工具回看', body.includes('session_event_read'))

@@ -55,7 +55,7 @@ function checkTrue(label: string, actual: boolean): void {
 // ── renderShutdown：重启后她得知道上一轮是【被停掉】的 ──────────────
 {
   const text = renderShutdown({
-    sessionId: 'plos-baiyu',
+    sessionId: 'plos',
     turn: 7,
     seq: 42,
     at: 1_000_000_000_000,
@@ -63,7 +63,7 @@ function checkTrue(label: string, actual: boolean): void {
   })
   checkTrue('★ 抬头明说"上次是停下来的"', text.includes('【上次是停下来的】'))
   checkTrue('含停止的原因', text.includes('你当时正在做事'))
-  checkTrue('★ 含 sessionId 坐标', text.includes('plos-baiyu'))
+  checkTrue('★ 含 sessionId 坐标', text.includes('plos'))
   checkTrue('★ 含 turn 坐标（人说的"轮"就是 turn）', text.includes('第 7 轮'))
   checkTrue('★ 含 seq 坐标（给 session_event_read 的钥匙）', text.includes('seq=42'))
   checkTrue('★ 告诉她用哪个工具回看', text.includes('session_event_read'))

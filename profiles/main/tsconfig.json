@@ -37,6 +37,7 @@
       "@deepseek-ai/dsh-session": ["../../../deepseek-harness/packages/core/session"],
       "@deepseek-ai/dsh-session/fork": ["../../../deepseek-harness/packages/core/session/lib/types/fork.d.ts"],
       "@deepseek-ai/dsh-session-projection": ["../../../deepseek-harness/packages/session/session-projection"],
+      "@deepseek-ai/dsh-session-persistence": ["../../../deepseek-harness/packages/session/session-persistence"],
       "@deepseek-ai/dsh-agent": ["../../../deepseek-harness/packages/core/agent"],
       "@deepseek-ai/dsh-agent-default-model": ["../../../deepseek-harness/packages/core/agent-default-model"],
       "@deepseek-ai/dsh-agent-loop": ["../../../deepseek-harness/packages/core/agent-loop"],

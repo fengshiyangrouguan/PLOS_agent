@@ -35,6 +35,9 @@ import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 // 副作用式类型导入：把 `agentDefaultModel` 注册到 Context 上。不 import 就没有这个属性
 // （DSH 的声明合并在各自的包里，得有人先把它拉进编译单元）。
 import type {} from '@deepseek-ai/dsh-agent-default-model'
+// `resume` / `SessionPersistence.stat` 的类型来自这个包 —— **得有人把它拉进编译单元**，
+// 否则 `ctx.sessionPersistence` 不存在（和上面那行同一个理由）。
+import type {} from '@deepseek-ai/dsh-session-persistence'
 import { ReasoningEffortId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 
@@ -58,7 +61,9 @@ export const name = 'qq-resident'
  * 走 `ctx.get('lastShutdown')`（可选服务）。不挂它拿到 `undefined`，
  * 那行短路，**影响为零**。
  */
-export const inject = ['agents', 'agentLoop', 'agentDefaultModel', 'tcb', 'pointer']
+// `sessionPersistence`：判"这个会话盘上有没有" —— 有就 `resume`（**只有它会打开写句柄**），
+// 没有才 `create`。缺了它就只能 create，会话永远是纯内存的（见下面那段注释）。
+export const inject = ['agents', 'agentLoop', 'agentDefaultModel', 'tcb', 'pointer', 'sessionPersistence']
 
 /** 配置。 */
 export interface Config {
@@ -81,7 +86,7 @@ export interface Config {
 
 /** 配置校验。 */
 export const Config: z<Config> = z.object({
-  sessionId: z.string().default('plos-baiyu'),
+  sessionId: z.string().default('plos'),
   cwd: z.string().default(''),
   greeting: z.string().default(''),
 })
@@ -127,14 +132,69 @@ export function apply(ctx: Context, config: Config): void {
             ...tcb.model.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(tcb.model.reasoningEffort) },
           }
 
-      const created = await ctx.agents.create({
-        sessionId: SessionId(config.sessionId),
-        ...config.cwd === '' ? {} : { meta: { cwd: config.cwd } },
-        agentOptions,
-        // 把 TCB 接到**这个 agent 自己的 scope** 上：白名单过滤 + 人设段落。
-        // 在 `setup` 里注册，所以不必解析 scope 反查 TCB —— 作用域本身就是答案。
-        ...tcb === undefined ? {} : { setup: (agentCtx: Context) => { ctx.tcb.apply(agentCtx, tcb) } },
-      })
+      // ★★ **有持久化就 resume，没有才 create。**
+      //
+      //   只有 `resume` 会「**打开持久化会话以便写入**」（`core/agent/src/index.ts:192-193`）。
+      //   用 `create` 建出来的会话是**纯内存**的：事件进得去、`flush()` 也不报错
+      //   （没有写句柄，故无事可做 ⇒ 静默），于是**盘上永远只有头帧＋首批帧**。
+      //
+      //   后果不是"少个备份"：`interrupt_plan` 的待办**只存 `sessionId + seq`**，
+      //   指望着靠 `session_event_read` 回去看原文 —— **盘上没有 ⇒ 那条恢复路径是断的**。
+      //
+      //   实测（2026-10-15）：换一个全新 id 启动，`create` **连文件都不建**；
+      //   而两个子会话（走的是带 parent/seed 的另一条路）写了 25 KB / 51 KB。
+      const sessionId = SessionId(config.sessionId)
+      // ★★ `stat()` 会**校验**存储里的头 —— 一份**写坏了的**日志会让它**抛错**。
+      //
+      //   那含义是"这个会话读不了"，**不是**"没有这个会话"：绝不能让它把整个启动带下去。
+      //   实测踩过：一个被打断写坏的 259 字节残帧让 `dsh` 直接
+      //   `fatal load failure: corrupt session log` —— **整台机器起不来**。
+      //
+      //   读不了就当作"没有"，退回 `create`（纯内存，不会再碰那个坏文件）；
+      //   ★ 但**这意味着此后仍然不落盘** —— 坏文件要由运维处置（改名挪走，
+      //   下一次 `create` 才会写出一份好的）。
+      let persisted: Awaited<ReturnType<typeof ctx.sessionPersistence.stat>> | undefined
+      try {
+        persisted = await ctx.sessionPersistence.stat(sessionId)
+      } catch (error) {
+        ctx.logger.error(
+          `qq-resident: 会话 "${config.sessionId}" 的日志读不了 —— 这次按空会话起。`
+          + `原文：${error instanceof Error ? error.message : String(error)}`,
+        )
+        persisted = undefined
+      }
+      const created = persisted === undefined
+        ? await ctx.agents.create({
+            sessionId,
+            ...config.cwd === '' ? {} : { meta: { cwd: config.cwd } },
+            agentOptions,
+            ...tcb === undefined ? {} : { setup: (agentCtx: Context) => { ctx.tcb.apply(agentCtx, tcb) } },
+          })
+        : await ctx.agents.resume({
+            resumeSessionId: sessionId,
+            agentOptions,
+            ...tcb === undefined ? {} : { setup: (agentCtx: Context) => { ctx.tcb.apply(agentCtx, tcb) } },
+          })
+      // ★ **`create` 之后显式落一次盘。**
+      //
+      //   实测：`create` 出来的会话**连文件都不建**（换全新 id 启动，`sessions/` 下
+      //   什么都没多）—— 于是**下一次开机 `stat` 找不到它、又走 `create`**，
+      //   永远进不了 `resume` ⇒ **永远不落盘**。
+      //   所以首次建出来就必须把它materialize 下来，`resume` 才有东西可接。
+      //
+      //   `resume` 那条**不需要**（它本来就是"打开持久化会话"）。
+      //   失败只记日志：落不了盘不该让她起不来。
+      if (persisted === undefined) {
+        try {
+          await ctx.sessions.flush(created.agent.session)
+        } catch (error) {
+          ctx.logger.warn(
+            'qq-resident: 新会话首次落盘失败（下次开机仍会是空会话）：%o',
+            error instanceof Error ? error.message : String(error),
+          )
+        }
+      }
+
       // 卸载可能发生在创建返回之前：这时不要留下没人管的会话。
       if (disposed) {
         await created.dispose()

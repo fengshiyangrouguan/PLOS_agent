@@ -31,7 +31,7 @@ import { renderSegments } from '../pipeline/render.ts'
 import { resolveMessage } from '../pipeline/segments.ts'
 // ★ **出站反解析**：正文里的 `[表情：X]` / `[未知表情:ID]` 要还原成 `face` 段 ✓
 //   （表与反查都在 `pipeline/face.ts` ✓ —— 那是"表情映射"的唯一落点 ✓）。
-import { FACE_EXAMPLES, parseOutgoingFaces } from '../pipeline/face.ts'
+import { parseOutgoingFaces } from '../pipeline/face.ts'
 import { FrameCapture } from './capture.ts'
 import type { ImageDescriber, ResolveContext, ResolvedSegment } from '../pipeline/segment.ts'
 import {
@@ -633,10 +633,18 @@ export class QqAdapter extends Service {
     //
     //   ★ 表里查不到的表情**整段丢掉**（用户定案）—— 发一个不存在的表情名没有意义 ✓，
     //     而当普通文本发出去更糟 ✗。判据与切分规则都在 `parseOutgoingFaces` 里 ✓。
+    // ★★ **出站一律不发表情段**（用户定案，2026-10-15）。
+    //
+    //   为什么：QQ 的新表情（sysemojis，**id 199 以上**）**只能收不能发** ✗ ——
+    //   发了被服务器拒（`OIDB error 11000 on 0x9155_1: get emoji … id 237
+    //   sysemojis cfg not found` ✗），而且★ **会招 QQ 风控** ✓
+    //   ⇒ 代价远大于"少一个表情" ✓ ⇒ **统一不发**最省事、也不会卡住别的功能 ✓。
+    //
+    //   ★ 实现：仍然用 `parseOutgoingFaces` 切分（它认得全角/半角/兜底各写法 ✓），
+    //     但**只取其中的文本段** —— 表情段直接丢掉 ✓（相邻文本已被它合并 ✓，不产出碎片 ✓）。
+    //   ⚠️ 于是 `[表情：X]` 从她的消息里**消失**（不是发成别的 ✓）—— 这是有意的 ✓。
     for (const part of parseOutgoingFaces(text)) {
-      segments.push(part.kind === 'face'
-        ? { type: 'face', data: { id: part.id } }
-        : { type: 'text', data: { text: part.text } })
+      if (part.kind === 'text') segments.push({ type: 'text', data: { text: part.text } })
     }
     // ★★ **一段都不剩 ⇒ 必须报错**（实测踩过，2026-10-15）。
     //
@@ -649,12 +657,10 @@ export class QqAdapter extends Service {
     if (segments.length === 0) {
       // ★★ **回传要给她看**（model-facing ✓）—— 不写文件名、不写内部概念 ✗。
       //
-      //   她要的信息只有两条：**这个表情不存在** ＋ **能用的有哪些** ✓。
-      //   （早先那句里带着 `see qq/pipeline/face.ts…` ✗ —— 那是给开发者看的，
-      //     她会把它原样转述出来，而**依然不知道该怎么办** ✓。）
+      //   现在"一段都不剩"只可能是**她只发了表情**（表情一律不发 ✓）⇒ 直接说清约束 ✓。
       throw new Error(
-        `这个表情不存在。[表情：X] 里的 X 要用 QQ 的表情名，`
-        + `常用的是：${FACE_EXAMPLES}。（写错了或者名字不对，这一段就会被丢掉）`,
+        '这条消息里只有表情，没有可发送的文字。'
+        + '**QQ 的新表情暂时不支持协议**（只能收、不能发），所以表情会被去掉 —— 请改用文字表达。',
       )
     }
     return await this.sendSegments(target, segments)

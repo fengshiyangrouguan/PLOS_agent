@@ -110,6 +110,11 @@ const REGISTERED_TOOLS = [
   'qq_set_group_ban',
   'qq_approve_friend',
   'qq_approve_group',
+  // ★ 第 2 批（2026-10-15）：QQ 空间
+  'qq_qzone_list',
+  'qq_qzone_post',
+  'qq_qzone_comment',
+  'qq_qzone_like',
 ] as const
 
 /**
@@ -825,6 +830,188 @@ export function apply(ctx: Context, config: Config): void {
           ...args.reason === undefined ? {} : { reason: String(args.reason) },
         })
         return { ok: true, approved: args.approve !== false }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ★ 第 2 批（2026-10-15）：QQ 空间（说说）
+  //
+  // ★ 照第 1 批拿到的那两条约定写 ✓：
+  //   ① `parameters` 必填字段**逐字段** `required: true` ✓
+  //   ② `output` **同时**要有 `schema` 和 `render` ✓；数组要 `items` ✓
+  //
+  // ★ **输出一律映射成干净形状** ✓ —— 协议端的原始对象有几十个字段 ✗，
+  //   直接回给模型既费令牌又没意义 ✓（而我们的瓶颈正是 TPM ✓）。
+  // ══════════════════════════════════════════════════════════════════════
+
+  ctx.tools.register(defineTool({
+    name: 'qq_qzone_list',
+    description:
+      'List Qzone posts (说说). Omit target_uin for your own Qzone. '
+      + 'Each post carries a tid, which qq_qzone_comment and qq_qzone_like need.',
+    parameters: {
+      target_uin: { type: 'number', description: 'Whose Qzone. Optional (defaults to yours).' },
+      pos: { type: 'number', description: 'Offset. Default 0.' },
+      num: { type: 'number', description: 'How many. Default 20.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          total: { type: 'number' },
+          posts: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                tid: { type: 'string', required: true },
+                content: { type: 'string', required: true },
+                createdTime: { type: 'number', required: true },
+              },
+            },
+          },
+          reason: { type: 'string' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? `${String(value.posts?.length ?? 0)} posts (${String(value.total ?? '?')} total).`
+          : `Qzone list failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      try {
+        const result = await ctx.qq.call('get_qzone_msg_list', {
+          ...args.target_uin === undefined ? {} : { target_uin: Number(args.target_uin) },
+          ...args.pos === undefined ? {} : { pos: Number(args.pos) },
+          ...args.num === undefined ? {} : { num: Number(args.num) },
+        })
+        const posts = (result.msglist ?? []).map(item => ({
+          tid: String(item.tid ?? ''),
+          content: String(item.content ?? ''),
+          createdTime: Number(item.created_time ?? 0),
+        }))
+        return { ok: true, total: Number(result.total ?? posts.length), posts }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_qzone_post',
+    description:
+      'Post to your Qzone (说说). ugc_right: 1 = everyone, 4 = friends, '
+      + '16 = only listed friends, 64 = only me, 128 = all but listed friends. Default 1.',
+    parameters: {
+      content: { type: 'string', required: true, description: 'The text of the post.' },
+      ugc_right: { type: 'number', description: 'Visibility. Default 1 (everyone).' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok ? 'Posted.' : `Post failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      try {
+        await ctx.qq.call('send_qzone_msg', {
+          content: String(args.content),
+          ...args.ugc_right === undefined ? {} : { ugc_right: Number(args.ugc_right) },
+        })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_qzone_comment',
+    description: 'Comment on a Qzone post (说说). tid comes from qq_qzone_list.',
+    parameters: {
+      tid: { type: 'string', required: true, description: 'The post tid.' },
+      content: { type: 'string', required: true, description: 'The comment text.' },
+      target_uin: { type: 'number', description: 'Owner of the post. Optional.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok ? 'Commented.' : `Comment failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      try {
+        await ctx.qq.call('comment_qzone', {
+          tid: String(args.tid),
+          content: String(args.content),
+          ...args.target_uin === undefined ? {} : { target_uin: Number(args.target_uin) },
+        })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, reason: reasonOf(error) }
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'qq_qzone_like',
+    description:
+      'Like a Qzone post (说说), or pass unlike=true to take the like back. '
+      + 'tid comes from qq_qzone_list.',
+    parameters: {
+      tid: { type: 'string', required: true, description: 'The post tid.' },
+      target_uin: { type: 'number', description: 'Owner of the post. Optional.' },
+      unlike: { type: 'boolean', description: 'true removes your like. Default false.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reason: { type: 'string' },
+          liked: { type: 'boolean' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? (value.liked === false ? 'Like removed.' : 'Liked.')
+          : `Like failed: ${value.reason ?? 'unknown reason'}`,
+      }],
+    },
+    async execute(args) {
+      try {
+        const action = args.unlike === true ? 'unlike_qzone' : 'like_qzone'
+        await ctx.qq.call(action, {
+          tid: String(args.tid),
+          ...args.target_uin === undefined ? {} : { target_uin: Number(args.target_uin) },
+        })
+        return { ok: true, liked: args.unlike !== true }
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }
       }

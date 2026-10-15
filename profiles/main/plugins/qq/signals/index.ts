@@ -59,6 +59,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { QqIncoming } from '../adapter/index.ts'
 import { conversationOf, parseConversation } from '../adapter/buffer.ts'
+// ★ 通知／申请的映射 —— **纯逻辑在 `notice.ts`** ✓（白名单、级别、两类、指纹 ✓，28 项自检 ✓）。
+import { mapNotice, mapRequest, type MappedSignal } from './notice.ts'
 // ★ 「描述拿不到」那个占位文本 —— **从渲染它的地方导出**，别在这里再写一遍字面量
 //   （两个文件靠同一个字面量耦合是脆的：改一处忘另一处就静默失效）。
 import { IMAGE_MISSING } from '../pipeline/segments.ts'
@@ -169,7 +171,32 @@ function nameOf(last: QqIncoming | undefined, fallback: string): string {
 }
 
 /**
- * 拉当前状态：**每个有未读的会话一条信号**。
+ * ★★ **待消费的通知／申请**（指纹 → 信号 ✓）。
+ *
+ * ## 为什么在模块级
+ *
+ * 放模块级是为了**不动 `collect` 的签名** ✓（少一处出错的地方 ✓）。
+ * 代价是插件热重载时**不清空** ✗ —— 而这里**无害** ✓：重载后 `apply` 会重新把
+ * 清单读出来用 ✓（而且"通知还在"本来就是**当前状态** ✓）。
+ *
+ * ## 消费语义（★ 见 `PLOS/docs/qq-notifications.md` §6.2 ✓）
+ *
+ * `pull()` **只读不移除** ✓（照 `peek` 的语义 —— "看不等读过" ✓）。
+ * 两类的消失条件**不同** ✓：
+ *
+ *  · **事件型**（进群／退群／撤回／戳…）—— ★ **报出去就移出** ✓
+ *    （和"有人 @ 了你"一样：发生了就是发生了 ✓，报过一次就不该再提 ✓）
+ *  · **待办型**（加好友／加群申请／群邀请）—— ★★ **永不由 `pull()` 移出** ✓
+ *    （**没处理就一直留着** ✓ —— 宁可重复报，也**绝不能丢** ✓✓）
+ *
+ * ⚠️ 待办型的**精确**清空点（她真的批准／拒绝之后 ✓）是**下一件事** ✓ ——
+ * 规格已经写好了（§6.2：挂 `qq_approve_*` 成功 ✓）。在那之前，
+ * 待办型会**每次 tick 都重报一遍** ✗（噪音 ✓，但**不丢** ✓ —— 方向是安全的 ✓）。
+ */
+const pending = new Map<string, MappedSignal>()
+
+/**
+ * 拉当前状态：**每个有未读的会话一条信号** ＋ **待消费的通知／申请**。
  *
  * **必须是"当前状态"而不是"增量日志"** —— 闲时定时器不重置，她在忙时照常走，
  * 所以这个函数会被反复调用；返回当前状态才能保证重复调用不会累积出错误的历史
@@ -182,6 +209,17 @@ function nameOf(last: QqIncoming | undefined, fallback: string): string {
  */
 function collect(ctx: Context, ready: Map<string, string>): Signal[] {
   const signals: Signal[] = []
+
+  // ★ **通知／申请**（指纹去重过 ✓）—— ★ 事件型**取走即清** ✓；待办型**留着** ✓。
+  for (const [fingerprint, mapped] of pending) {
+    if (mapped.signalClass === 'event') pending.delete(fingerprint)
+    signals.push({
+      kind: mapped.kind,
+      source: mapped.source,
+      priority: mapped.priority,
+      data: mapped.data,
+    })
+  }
 
   // ★ **描述补上了的那几条** —— 数据是**渲染好的那条消息**与**会话 id**。
   //
@@ -391,6 +429,59 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
 
+  // ── ★ 通知／申请：接事件、攒列表 ──────────────────────────────────
+  //
+  //   ★ 帧的字段**全部是实测的** ✓（`PLOS/docs/qq-notifications.md` §二/§三 ✓）——
+  //   映射逻辑（白名单、级别、两类、指纹）在 `notice.ts` ✓（纯函数 ＋ 28 项自检 ✓）。
+  //
+  //   ⚠️ **`selfId` 是懒取的** —— 映射要它判"这条是不是冲我来的" ✓，
+  //   而 `get_login_info` 是异步的 ✗。**没拿到之前按"不是我"处理** ✓ ——
+  //   ★ 方向是安全的：宁可把"她自己进群"报成"有人进群" ✓，
+  //     也不要反过来（把**所有人**进群都报成"她进群了" ✗✗）。
+  let selfId = ''
+  void ctx.qq.call('get_login_info', {}).then(
+    (info: unknown) => {
+      const record = info as Record<string, unknown> | undefined
+      selfId = String(record?.['user_id'] ?? record?.['userId'] ?? '')
+    },
+    () => { /* 拿不到就算了 —— 见上面的安全方向 ✓ */ },
+  )
+
+  /** ★ 群名 —— **查库** ✓（通知帧里只有 `group_id`、没有群名 ✗，实测 ✓）。 */
+  const nameOfGroup = (groupId: string): string =>
+    ctx.db.conversations.get(`group:${groupId}`)?.name ?? `群${groupId}`
+  /** ★ 私聊名 —— 同样查库 ✓；拿不到就用会话 id ✓（★ **不能是空串** ✗）。 */
+  const nameOfConversation = (conversation: string): string =>
+    ctx.db.conversations.get(conversation)?.name ?? conversation
+
+  /**
+   * 把一条映射好的信号记进待消费列表。
+   *
+   * ★ **按指纹去重** ✓ —— 同一件事**只进一次** ✓（这就是"当前状态而不是增量日志" ✓）。
+   *
+   * @param mapped - 映射结果；`undefined`（不在白名单 ✓）时什么都不做 ✓。
+   */
+  const remember = (mapped: MappedSignal | undefined): void => {
+    if (mapped === undefined) return
+    if (pending.has(mapped.fingerprint)) return
+    pending.set(mapped.fingerprint, mapped)
+    // ★ 上限（内存卫生 ✓，不是正确性 ✓）：丢了旧指纹最坏就是"极老的事重报一次" ✓。
+    if (pending.size > 200) {
+      const oldest = pending.keys().next().value
+      if (oldest !== undefined) pending.delete(oldest)
+    }
+    // ★ 20 级 ⇒ **立刻催一次拉取** ✓ —— 她这一轮就该看见，不必等闲时定时器 ✓。
+    if (mapped.priority >= PRIORITY_MENTION) {
+      void ctx.perception.tick().catch(() => { /* tick 失败不影响攒列表 ✓ */ })
+    }
+  }
+
+  /** 每次映射时才取 —— 这样 `selfId` 是懒取的就自然也生效了 ✓。 */
+  const mapContext = () => ({ selfId, nameOfGroup, nameOfConversation })
+
+  ctx.on('qq/notice', (raw) => { remember(mapNotice(raw, mapContext())) })
+  ctx.on('qq/request', (raw) => { remember(mapRequest(raw, mapContext())) })
+
   // ── 信号源：注册即 effect，随插件卸载 ────────────────────────────
   ctx.effect(() => ctx.perception.register({
     domain: 'QQ',
@@ -399,6 +490,30 @@ export function apply(ctx: Context, config: Config): void {
       mention: '群「{name}（id:{id}）」里有人 @ 了你',
       private: '{sender}(id:{id}) 私聊了你',
       group: '群「{name}（id:{id}）」里有 {count} 条新消息',
+      // ★★ **通知与申请**（2026-10-15 加 ✓）—— 文本见 `PLOS/docs/qq-notifications.md` §6.1 ✓。
+      //   ★ `kind` 由 `notice.ts` 的 `mapNotice` / `mapRequest` 产出 ✓（拼错渲染会失败 ✓）。
+      //   ★ 占位符直接写 `{user}` / `{operator}` / `{comment}` / `{duration}` ✓ ——
+      //     渲染器是通用的（`applyTemplate` ✓），**不需要为它们加接口** ✓；
+      //     但**取不到就会抛错** ✗ ⇒ 所以 `data` 里必须**每个键都填**（兜底在映射侧 ✓）。
+      pokeGroup: '群「{name}（id:{id}）」里 {sender} 戳了戳你',
+      pokePrivate: '{sender}(id:{id}) 私聊戳了戳你',
+      joinedSelf: '{operator} 把你拉进了群「{name}（id:{id}）」',
+      joinedSelfApprove: '你加入了群「{name}（id:{id}）」',
+      memberJoined: '群「{name}（id:{id}）」里 {user} 进来了（{operator} 批准的）',
+      kickedSelf: '{operator} 把你踢出了群「{name}（id:{id}）」',
+      groupDisbanded: '群「{name}（id:{id}）」解散了',
+      memberKicked: '群「{name}（id:{id}）」里 {user} 被 {operator} 踢了',
+      memberLeft: '{user} 退出了群「{name}（id:{id}）」',
+      muted: '群「{name}（id:{id}）」里 {user} 被 {operator} 禁言了 {duration}',
+      unmuted: '群「{name}（id:{id}）」里 {user} 的禁言被解除了',
+      adminSelf: '你在群「{name}（id:{id}）」里成了管理员',
+      adminOther: '群「{name}（id:{id}）」里 {user} 成了管理员',
+      groupRecall: '群「{name}（id:{id}）」里 {operator} 撤回了一条消息',
+      friendRecall: '{sender}(id:{id}) 撤回了一条消息',
+      // ★★ 待办型（★ 要**她**决定 ✓ —— `comment` 是验证问答／附言，必须原样给她 ✓）
+      friendRequest: '{sender}(id:{id}) 申请加你为好友，附言：{comment}',
+      groupRequest: '{sender}(id:{id}) 申请加入群「{name}（id:{id}）」，验证信息：{comment}',
+      groupInvite: '{operator} 邀请你加入群「{name}（id:{id}）」',
       // ★ 图片**稍后**才描述出来的那一次 —— 数据是**渲染好的那条消息**与**会话 id**。
       //   自带理由，所以她看得出"为什么又被叫了一次"，而不是以为消息重复了。
       imageReady: '【图片已渲染完成】{conversation} {text}',

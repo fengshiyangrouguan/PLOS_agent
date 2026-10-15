@@ -340,12 +340,14 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.on('llm/stream', (options: GenerateOptions, next): AsyncIterable<StreamChunk> => {
     return (async function* (): AsyncIterable<StreamChunk> {
-      // ★★ **常驻会话不排队、也不换模型** —— 配额让给她（取舍 2）。
-      if (options.sessionId === config.residentSessionId) {
-        yield* next()
-        return
-      }
-
+      // ★★ **常驻会话（她）照样参与均衡。**
+      //
+      //   我第一版让她**整个跳过**了 —— 那是错的：用户要的正是
+      //   「**main** 同时使用 R1 / V3.2 / V3」，而**她一个回合发 5~10 条**、
+      //   是最容易撞 TPM 的那个 ⇒ **她才是最需要均衡的人**。
+      //
+      //   她得到的优待是**不排队**（下面那处），不是"不换模型"。
+      const isResident = options.sessionId === config.residentSessionId
       const tokens = estimateTokens(options)
 
       // ── ① 均衡：在等价候选里挑一个（没配组 ⇒ 只有自己）────────────
@@ -377,30 +379,35 @@ export function apply(ctx: Context, config: Config): void {
       options.provider = picked.provider
       options.model = picked.model
 
-      // ── ② 限速：排队等，而不是拒绝（取舍 1）──────────────────────
+      // ── ② 限速：**她优先、不排队**；后台那几路排队等（取舍 1、2）────
       const bucket = bucketFor(picked.provider, picked.model)
-      const deadline = Date.now() + config.maxWaitMs
-      for (;;) {
-        let waitMs = 0
-        let blockedBy: string | undefined
-        try {
-          const verdict = bucket.check(tokens, Date.now())
-          waitMs = verdict.waitMs
-          blockedBy = verdict.blockedBy
-        } catch {
-          break
+      if (!isResident) {
+        const deadline = Date.now() + config.maxWaitMs
+        for (;;) {
+          let waitMs = 0
+          let blockedBy: string | undefined
+          try {
+            const verdict = bucket.check(tokens, Date.now())
+            waitMs = verdict.waitMs
+            blockedBy = verdict.blockedBy
+          } catch {
+            // ★★ 限速器自己出问题必须放行（取舍 3）—— 绝不许阻断出网。
+            break
+          }
+          if (waitMs === 0) break
+          if (Date.now() + waitMs > deadline) {
+            // 等太久了 ⇒ **放行**：宁可冒险，也不许把后台那几路卡死。
+            ctx.logger.warn(
+              `llm-throttle: 排队超上限放行（${blockedBy ?? '?'}，${keyOf(picked.provider, picked.model)}）`,
+            )
+            break
+          }
+          await sleep(waitMs)
         }
-        if (waitMs === 0) break
-        if (Date.now() + waitMs > deadline) {
-          // 等太久了 ⇒ **放行**：宁可冒险，也不许把她卡死。
-          ctx.logger.warn(
-            `llm-throttle: 排队超上限放行（${blockedBy ?? '?'}，${keyOf(picked.provider, picked.model)}）`,
-          )
-          break
-        }
-        await sleep(waitMs)
       }
 
+      // ★ **她也要计数** —— 不排队不等于不占额度。少算她那一份的话，
+      //   后台那几路会以为还有余量，于是**替她**把 429 招来。
       bucket.enter(tokens, Date.now())
       try {
         // ── ③ 盯住流：429 ⇒ 把这个模型**关进冷却**，别马上再碰它 ────

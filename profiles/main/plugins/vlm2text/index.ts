@@ -160,7 +160,21 @@ export class VlmToText extends Service {
     }
 
     const assembler = new BlockAssembler()
-    for await (const chunk of this.ctx.llm.stream(options)) assembler.push(chunk)
+    // ★ **超时**（见 `config.ts` 的 `timeoutMs`）：实测同一份请求 1.2~38.5 秒，
+    //   而唤醒不等归档 ⇒ 超时按**失败**处理（`describe.ts` 会因此**不写缓存**、
+    //   不抛错、渲染成 `[图片]`）⇒ 她**立刻**被唤醒、知道有人发了图。
+    //   后台那次仍会跑完并写缓存，好在稍后再唤醒一次（【图片已渲染完成】）。
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      controller.abort(new Error(`VLM 超时（${String(this.config.timeoutMs)}ms）`))
+    }, this.config.timeoutMs)
+    try {
+      for await (const chunk of this.ctx.llm.stream({ ...options, signal: controller.signal })) {
+        assembler.push(chunk)
+      }
+    } finally {
+      clearTimeout(timer)
+    }
 
     const finish = assembler.finish
     if (finish.kind === 'error' || finish.kind === 'aborted') {

@@ -237,8 +237,11 @@ export type OutgoingPart =
  */
 export function parseOutgoingFaces(text: string): OutgoingPart[] {
   const parts: OutgoingPart[] = []
-  // 两段式：`表情：` 走查表，`未知表情:` 自带 id 直接认。
-  const pattern = /\[(表情：|未知表情:)([^\]]*)\]/g
+  // ★ **容忍半角冒号与两侧空格** —— 她的写法不受控 ✓。
+  //   实测（2026-10-15）：写成半角 `[表情:笑哭]` 会落进"认不出"那条路 ⇒ 全丢掉 ⇒
+  //   若整条消息**只有**那个表情，就变成**空段数组** ⇒ 协议端直接拒：
+  //   `message segment array must not be empty` ✗。
+  const pattern = /\[(表情|未知表情)\s*[:：]\s*([^\]]*)\]/g
   let cursor = 0
 
   /**
@@ -264,11 +267,10 @@ export function parseOutgoingFaces(text: string): OutgoingPart[] {
     pushText(text.slice(cursor, at))
     cursor = at + whole.length
 
-    if (tag === '未知表情:') {
+    if (tag === '未知表情') {
       if (/^\d+$/.test(body.trim())) parts.push({ kind: 'face', id: body.trim() })
       continue
     }
-    // ★ 容忍多余空格（老表里有 `[表情： 嘘]` 那种瑕疵，她可能照抄出带空格的形态）。
     const id = FACE_TEXT_TO_ID[`[表情：${body.trim()}]`]
     // ★ 表里没有 ⇒ 这里什么都不产出 ⇒ **整段消失** ✓（前后文本照旧接上 ✓）。
     if (id !== undefined) parts.push({ kind: 'face', id })

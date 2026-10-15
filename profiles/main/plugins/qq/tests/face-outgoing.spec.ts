@@ -78,5 +78,17 @@ function check(label: string, actual: unknown, expected: unknown): void {
     [{ kind: 'face', id: '237' }])
 }
 
+// ── ★ 实测踩到的两种写法（2026-10-15）────────────────────────────────
+{
+  check('★★ **半角冒号**也认（她的写法不受控）', parseOutgoingFaces('[表情:笑哭]'),
+    [{ kind: 'face', id: '237' }])
+  check('★ 冒号两侧带空格也认', parseOutgoingFaces('[表情 : 笑哭]'),
+    [{ kind: 'face', id: '237' }])
+  check('★ 半角 + 未知 id 的兜底形态', parseOutgoingFaces('[未知表情: 999]'),
+    [{ kind: 'face', id: '999' }])
+  check('★★ **只有认不出的表情 ⇒ 空数组**（adapter 那边据此报错，而不是发出空段 ✗）',
+    parseOutgoingFaces('[表情:不在表里]'), [])
+}
+
 console.log(`\n通过 ${passed}，失败 ${failed}`)
 if (failed > 0) process.exitCode = 1

@@ -638,6 +638,20 @@ export class QqAdapter extends Service {
         ? { type: 'face', data: { id: part.id } }
         : { type: 'text', data: { text: part.text } })
     }
+    // ★★ **一段都不剩 ⇒ 必须报错**（实测踩过，2026-10-15）。
+    //
+    //   她发的东西可能**只有**一个表里没有的表情 ⇒ 按"认不出就丢掉"的规则
+    //   什么都剩不下 ⇒ 协议端直接拒：
+    //       `message segment array must not be empty` ✗
+    //
+    //   ★ 而**静默地发出去更糟** —— 她会以为发出去了 ✓ ⇒ 这里抛错，
+    //     `qq_send_message` 会把 `Send failed: …` 回给她 ✓（她那就能自己改 ✓）。
+    if (segments.length === 0) {
+      throw new Error(
+        'nothing left to send: an emoji name that is not in the face table produces no segment'
+        + ' (see qq/pipeline/face.ts for the names it knows)',
+      )
+    }
     return await this.sendSegments(target, segments)
   }
 

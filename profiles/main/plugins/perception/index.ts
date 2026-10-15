@@ -59,6 +59,17 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /**
+ * ★★ **同源补充的接收方**：接下返回 `true`（表示"内容已经补进去了，**别再 wake**"）。
+ *
+ * @param domain - 信号域。
+ * @param source - 消息所属会话（`group:<id>` / `private:<id>`）。
+ * @param text - 消息**原文**（已渲染）。
+ * @param priority - 这条消息的优先级。
+ */
+export type SupplementHandler =
+  (domain: string, source: string, text: string, priority: number) => boolean
+
+/**
  * 感知设施，注册为 `ctx.perception`。
  */
 export class Perception extends Service {
@@ -71,6 +82,18 @@ export class Perception extends Service {
 
   /** 已注册的信号源，**保持注册顺序** —— 渲染时按这个顺序分节。 */
   private readonly sources: SignalSource[] = []
+
+  /**
+   * ★★ **"同源补充"的接收方**（当前只有 `attention`）。
+   *
+   * 与 {@link sources} 是**两条路**：
+   *
+   * | | `sources`（`register`） | `supplements`（`onSupplement`） |
+   * |:--|:--|:--|
+   * | 内容 | 全体拉取后每个会话一段**梗概** | ★ **消息原文** |
+   * | 谁决定 | 感知层（按间隔/优先级） | **接收方**决定接不接（同源同级才接） |
+   */
+  private readonly supplements: SupplementHandler[] = []
 
   /** 闲时间隔，AI 可通过工具调整。 */
   private currentIntervalMs: number
@@ -150,6 +173,55 @@ export class Perception extends Service {
   /** 当前已注册的领域名（按注册顺序）。 */
   domains(): string[] {
     return this.sources.map(source => source.domain)
+  }
+
+  /**
+   * ★★ **注册一个"同源补充"的接收方**（当前只有 `attention`）。
+   *
+   * 注册即 effect：返回的注销函数随 owning fiber 卸载，或由调用方显式调用。
+   *
+   * ★ **分层保持单向**：域 → 感知层 → 上层注册的处理器。
+   *   感知层**不反向调用**上层（所以不写成"感知层 import attention"）。
+   *
+   * @param handler - 处理器；它**接下**时返回 `true`。
+   * @returns 注销函数。
+   */
+  onSupplement(handler: SupplementHandler): () => void {
+    this.supplements.push(handler)
+    return () => {
+      const index = this.supplements.indexOf(handler)
+      if (index >= 0) this.supplements.splice(index, 1)
+    }
+  }
+
+  /**
+   * ★★ **旁路**：把一条**消息原文**直接交给正在跑的那一轮，**不走 `pull`**。
+   *
+   * 与 `tick()` 的分别：那边是"全体拉取 ⇒ 每个会话一段梗概 ⇒ 排队/投递"，
+   * 这边是"**同一个会话里她又说了一句** ⇒ 直接补进去"。
+   *
+   * `text` 由**域**自己渲染好（`qq` 侧是 `render()`）—— 感知层不认识消息长什么样。
+   *
+   * @param domain - 信号域。
+   * @param source - 消息所属会话。
+   * @param text - 消息**原文**（必须已渲染：图片要在这一步就已经有描述）。
+   * @param priority - 这条消息的优先级。
+   * @returns 有接收方接下返回 `true`（调用方**不要**再 `wake()`）。
+   */
+  supplement(domain: string, source: string, text: string, priority: number): boolean {
+    // 第一个接下的就算 —— 眼下只有一个接收方（`attention`）。
+    for (const handler of [...this.supplements]) {
+      try {
+        if (handler(domain, source, text, priority)) return true
+      } catch (error) {
+        // 一个处理器抛错不该饿死后面的（与 `emit` 那条纪律同理）。
+        this.ctx.logger.warn(
+          'perception: 补充处理器失败：%o',
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+    }
+    return false
   }
 
   /** 当前闲时间隔（毫秒）。 */

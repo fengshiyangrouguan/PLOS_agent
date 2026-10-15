@@ -337,8 +337,45 @@ export function apply(ctx: Context, config: Config): void {
     //
     //   别的会话不受影响（`isWaiting` 只看那一个会话）。
     if (offer(conversationOf(incoming))) return
-    // 冲她来的消息**当场叫醒感知层**去拉一次；普通群消息（0 级）不叫，只搭便车。
-    if (wakes(incoming)) wake()
+    // ★ **冲她来的消息**：先问"能不能**直接补进她正在跑的那一轮**"（同源同级），
+    //   补不进去才叫醒感知层去**全体拉取**。
+    //
+    //   为什么先问那一下（两条都是实测过的坏结果）：
+    //     · **全体拉取**给她的是每个会话一段**梗概**，而"同一个人接着说的下一句"
+    //       她该看到**原文**；
+    //     · 而如果只是排进队列，那要等下一条通知才被取
+    //       （「发了消息她半天不理，我再说一句就全收到了」）。
+    //
+    //   ★ 位置在 `archive` **之后**：下面 `render()` 走的是同一条解析路径
+    //     （有解析缓存），所以拿到的是**已渲染**的原文 —— 图片这时候已经有描述。
+    //     用户定案的边界：「**steer 必须在 archive 之后**」。
+    //
+    //   普通群消息（0 级）不叫，只搭便车 ⇒ 也不必补（她根本没为它开一轮）。
+    if (wakes(incoming)) {
+      void (async (): Promise<void> => {
+        const conversation = conversationOf(incoming)
+        const priority = incoming.mentionsSelf
+          ? PRIORITY_MENTION
+          : (parseConversation(conversation)?.kind === 'private' ? PRIORITY_PRIVATE : PRIORITY_GROUP)
+        try {
+          const text = await ctx.qq.render(incoming)
+          if (ctx.perception.supplement('QQ', conversation, text, priority)) {
+            // ★ **补即已读**（用户定案）：收下了就要 `drain`，否则下次 `pull()`
+            //   会再带上它 ⇒ 她收到两遍。
+            ctx.qq.drain(conversation)
+            return
+          }
+          wake()
+        } catch (error) {
+          // 补不进去不该更坏 —— 回落成"正常唤醒"。
+          ctx.logger.warn(
+            'qq-signals: 同源补充失败，回落成正常唤醒：%o',
+            error instanceof Error ? error.message : String(error),
+          )
+          wake()
+        }
+      })()
+    }
   })
 
   // ── 信号源：注册即 effect，随插件卸载 ────────────────────────────

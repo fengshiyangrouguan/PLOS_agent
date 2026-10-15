@@ -125,6 +125,17 @@ export class Attention extends Service {
   private currentPriority = 0
 
   /**
+   * ★★ **这一轮是被哪个源唤醒的**（`group:<id>` / `private:<id>`）。
+   *
+   * ★ 这正是当初被我删掉的 `trigger` 字段**该在的地方** —— 当时的理由是
+   * "它能从 `highest` 推出来"，**那是错的**：优先级说不出**是哪个会话** ✗。
+   * 同源补充（{@link supplement}）全靠它判断。
+   *
+   * 与 `currentPriority` **同生同死**：只在真的开始/切换一轮的地方赋值。
+   */
+  private currentSource: string | undefined
+
+  /**
    * @param ctx - 本插件的上下文。
    * @param config - 配置。
    */
@@ -221,6 +232,7 @@ export class Attention extends Service {
       agent.steer(message(withHint(item.notice.text, URGENT_HINT)))
       // 硬切**结束**了这一轮；下面这句 steer 开的是**新一轮** —— 基准换成它。
       this.currentPriority = item.notice.highest
+      this.currentSource = item.notice.signals[0]?.source
     } else if (plan.kind === 'steer') {
       agent.steer(message(withHint(item.notice.text, WRAPUP_HINT)))
       // ★ **不更新基准**：`steer` 不开始新 turn，被打断的那件事没有变
@@ -228,6 +240,7 @@ export class Attention extends Service {
     } else {
       agent.followup(message(item.notice.text))
       this.currentPriority = item.notice.highest
+      this.currentSource = item.notice.signals[0]?.source
     }
 
     // ★ `> n` 的原任务被中断 —— 记一条待办（§20.4）。
@@ -262,6 +275,55 @@ export class Attention extends Service {
    *
    * @param notice - 感知条目。
    */
+  /**
+   * ★★ **同源补充**：把一条**消息原文**直接补进她正在跑的那一轮。
+   *
+   * 与 `onNotice` 那条路不同 —— 那边是"全体 `pull()` ⇒ 每个会话一段**梗概**"；
+   * 这里**不拉取、不做梗概**，交过去的就是**消息本身**。
+   *
+   * ## 什么情况下接
+   *
+   * `source` 与她**这一轮被唤醒的那个源**相同、且优先级**不高于**当前基准 ——
+   * 也就是"**同一个会话里她又说了一句**"。这时：
+   *
+   *   · **不该排队** —— 排队要等下一条通知才被取（实测表现：「发了消息她半天不理，
+   *     我再说一句就全收到了」）
+   *   · **也不该整套重拉** —— 那样她只拿到一份梗概，**看不到原文**
+   *
+   * ⇒ **直接 `steer` 进去** ✓
+   *
+   * ## 两条边界（用户定案）
+   *
+   *   · ★ **补即已读**：**调用方**负责 `drain`。不 drain 的话下次 `pull()` 会再带上它
+   *     ⇒ 她收到两遍。
+   *   · ★ **必须在 `archive` 之后调**：否则她读到的是**没渲染**的内容
+   *     （图片会渲染成空描述）。
+   *
+   * @param domain - 信号域（写进消息来源，排障用）。
+   * @param source - 消息所属会话（`group:<id>` / `private:<id>`）。
+   * @param text - **消息原文**（已经渲染好的）。
+   * @param priority - 这条消息的优先级。
+   * @returns 接下了返回 `true`（调用方**不要**再 `wake()`）；不接返回 `false`。
+   */
+  supplement(domain: string, source: string, text: string, priority: number): boolean {
+    if (this.currentSource === undefined || this.currentSource !== source) return false
+    // 更高级的东西走正常那条路（它可能要中断她，不是"补一句"）。
+    if (priority > this.currentPriority) return false
+    const agent = this.targetAgent()
+    if (agent === undefined) return false
+
+    // ★ **不加 `WRAPUP_HINT`** —— 她是"接着说"，不是被打断，**不该收尾**。
+    //   `WRAPUP_HINT` 的语义正是"答一句就回来"，那是对**中断**说的。
+    //
+    // ★ **不更新 `currentPriority` / `currentSource`** —— `steer` 不开始新 turn，
+    //   与 `deliver` 里 `steer` 那一支同理（她甚至可以不管他）。
+    agent.steer(createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind: 'perception', domain },
+    }))
+    return true
+  }
+
   private onNotice(notice: PerceptionNotice): void {
     if (notice.signals.length === 0) return
     this.queue.push(notice)
@@ -351,9 +413,22 @@ export class Attention extends Service {
       }
     })
 
+    // ★★ **同源补充的接收方** —— 把"同一个会话里她又说了一句"**直接补进她那一轮**。
+    //
+    //   为什么需要它（两条都是实测过的坏结果）：
+    //     · 走正常路（全体 `pull()`）⇒ 她收到的是**梗概**，**看不到原文**
+    //     · 排进队列 ⇒ 要等下一条通知才被取 ⇒「发了消息她半天不理，
+    //       我再说一句就全收到了」
+    //
+    //   ★ 判断在**这里**做（不在域里）：只有 attention 知道"她这一轮被谁唤醒的"。
+    const offSupplement = this.ctx.perception.onSupplement(
+      (domain, source, text, priority) => this.supplement(domain, source, text, priority),
+    )
+
     yield () => {
       off()
       offIdle()
+      offSupplement()
     }
   }
 }

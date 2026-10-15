@@ -137,6 +137,29 @@ declare module '@deepseek-ai/cordis' {
      * @param detail - 可读补充（关闭码、错误信息等）。
      */
     'qq/connection'(state: QqConnectionState, detail?: string): void
+    /**
+     * ★★ **收到一条通知**（`post_type=notice`）—— 加好友、退群/进群、禁言、
+     * 撤回、点赞评论… 观察类事件，监听器返回值被丢弃。
+     *
+     * ★ 载荷是**原始帧**（`Record<string, unknown>`），**刻意不收紧类型** ✗ ——
+     * 各 OneBot 实现的字段差异很大，而**下一步是抓帧**（用户定的顺序 ✓）
+     * ⇒ 拿到真实帧之后再按它写类型 ✓。
+     *
+     * 已知的 `notice_type` 取值（来自 SnowLuma 的 schema ✓）：
+     * `friend_add` / `friend_recall` / `group_recall` / `group_admin` /
+     * `group_increase` / `group_decrease` / `group_ban` ✓
+     *
+     * @param raw - 原始通知帧。
+     */
+    'qq/notice'(raw: Record<string, unknown>): void
+    /**
+     * ★★ **收到一条请求**（`post_type=request`）—— **加好友**／**加群申请** ✓。
+     *
+     * ★ 同样带**原始帧**（见上）；已知有 `request_type: friend | group` ✓。
+     *
+     * @param raw - 原始请求帧。
+     */
+    'qq/request'(raw: Record<string, unknown>): void
   }
 }
 
@@ -398,7 +421,28 @@ export class QqAdapter extends Service {
       this.onMessage(raw as MessageEvent)
       return
     }
-    // notice / request / message_sent 暂不处理——但**不静默**，留一行日志便于后续补。
+    // ★★ **通知与请求**（加好友／加群申请、退群、禁言、点赞评论…）——
+    //   从"忽略"改成**发出去** ✓。
+    //
+    //   ★ 这里**刻意只带原始帧**（`raw`），**不去猜字段名** ✗ ——
+    //   OneBot 各实现的通知字段差异很大（SnowLuma 自己的 schema 在
+    //   `config-ClrCrmAk.js` 里，值是 `friend_add` / `group_recall` / `group_admin` /
+    //   `group_increase` / `group_decrease` / `group_ban` ✓，而"申请"走 `post_type=request`
+    //   的 `request_type: friend|group` ✓）。
+    //
+    //   ★ **下一步是抓帧**（用户定的顺序 ✓）⇒ 拿到真实帧之后再收紧这里的类型 ✓，
+    //   而不是现在按印象写一套 ✗（这条在 `AGENTS.md` §一 里已经付过几次代价 ✓）。
+    if (raw.post_type === 'notice') {
+      this.ctx.emit('qq/notice', raw)
+      this.log('debug', `通知 notice_type=${String(raw['notice_type'])}`)
+      return
+    }
+    if (raw.post_type === 'request') {
+      this.ctx.emit('qq/request', raw)
+      this.log('debug', `申请 request_type=${String(raw['request_type'])}`)
+      return
+    }
+    // 其余的（`message_sent` 等）暂不处理——但**不静默**，留一行日志便于后续补。
     this.log('debug', `忽略未处理的 post_type=${String(raw.post_type)}`)
   }
 

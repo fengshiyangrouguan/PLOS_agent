@@ -125,6 +125,40 @@ const REGISTERED_TOOLS = [
 ] as const
 
 /**
+ * ★★ 剥掉 `text` **开头**那个手写的 `@名字` ✗ —— ★ 因为 `at` 段**自己会渲染出来** ✓✓。
+ *
+ * ## 为什么需要它（2026-10-16 实测 ✓，★ 描述改过了还是拦不住 ✗）
+ *
+ * ★ 她**倾向于**在传 `at` 的同时，**又在正文开头手写一个 `@名字`** ✗ ——
+ * ★★ 于是群里显示成 `@贺富内的裤睿  @NAVI 测试@功能~` ✗✓（★ 两个 @ ✓）。
+ *
+ * ★ 证据（★ 六次带 `at` 的调用里，**后三次知道了要 QQ 号，仍然每次都手写** ✗）：
+ * ```
+ * ④ text:"测试@功能~ @NAVI",      at:["2578758868"]
+ * ⑤ text:"@冯氏羊肉馆 测试@功能",  at:["2673439877"]
+ * ⑥ text:"@NAVI 测试@功能~",      at:["2578758868"]
+ * ```
+ * ★ 而她的思考里**从没判断过要不要写** ✗ —— ★ 只写「**测试@功能**」✓。
+ * ⇒ ★★ 可见 `at` 被她当成"**技术参数**"✗，而 `@名字` 被她当成"**内容的一部分**"✗✓
+ * ⇒ ★ 所以**描述拦不住** ✗，在工具里兜底 ✓。
+ *
+ * ## 边界（★ 都很保守 ✓）
+ *
+ * · ★ **只在开头** ✗ —— 句子中间的 `@` 不动 ✓（★ 那可能是正经内容 ✓）。
+ * · ★ **名字对不对不管** ✗ —— ★ `at` 段会渲染**正确的**那个 ✓✓。
+ * · ★★ **剥完为空就保留原文** ✗ —— ★ 只剩 `@某人` 时，那句"在跟谁说话"还有意义 ✓。
+ *
+ * @param text - 原始正文。
+ * @returns 去掉开头那个 `@名字`（含其后空白）的正文 ✓。
+ */
+export function stripLeadingMention(text: string): string {
+  const match = /^@\S+\s+/.exec(text)
+  if (match === null) return text
+  const rest = text.slice(match[0].length)
+  return rest.trim() === '' ? text : rest
+}
+
+/**
  * 注册所有工具。
  * @param ctx - 本插件的上下文；`tools` 与 `qq` 已由 inject 声明，故此处必已就绪。
  */
@@ -184,7 +218,11 @@ export function apply(ctx: Context, config: Config): void {
         return { ok: false, reason: `invalid target "${args.target}", expected "group:<id>" or "private:<id>"` }
       }
       try {
-        const messageId = await ctx.qq.sendText(target, args.text, {
+        // ★★ 有 `at` 时，剥掉正文开头那个**手写的 `@名字`** ✗ —— ★ 否则会显示两个 @ ✓
+        //   （★ 见 `stripLeadingMention` 的注释 ✓）。★ 没有 `at` 就不动 ✓。
+        const hasAt = args.at !== undefined && args.at.length > 0
+        const body = hasAt ? stripLeadingMention(args.text) : args.text
+        const messageId = await ctx.qq.sendText(target, body, {
           ...args.at === undefined ? {} : { at: args.at },
           ...args.reply_to === undefined ? {} : { replyTo: args.reply_to },
         })

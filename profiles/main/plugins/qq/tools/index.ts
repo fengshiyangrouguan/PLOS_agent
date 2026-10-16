@@ -712,11 +712,27 @@ export function apply(ctx: Context, config: Config): void {
       'Mute someone in a QQ group, or lift a mute. duration is in seconds; '
       + 'pass 0 to lift a mute. Pass user_id "all" to mute the whole group.',
     parameters: {
-      // ★★ 用 `TARGET_PARAM` ✓（★ 它带**具体例子** ✓：「Example: "group:871074118"」✓）。
-      //    实测（2026-10-16）：只写抽象的 `'Group, as "group:<id>".'` ✗ ⇒ 她填了
-      //    `{"group_id":"728636404", …}` ✗ ⇒ DSH 报 `missing required property "target"` ✓。
-      //    ★ 而 `qq_send_message` 一直正常 ✓ —— 差别就在**有没有例子** ✓✓。
-      target: TARGET_PARAM,
+      // ★★★ **直接照协议端的形状写** ✓ —— `set_group_ban` 本来就是
+      //     `{group_id, user_id, duration}` ✓，**不需要**把它包成 `target:"group:<id>"` ✗。
+      //
+      //    为什么之前写错了：★ 我把 `AGENTS.md` §二 读过头了 ✗ ——
+      //    那条的规矩是「**group:/private: 这类分叉只许出现在 adapter**」✓，
+      //    ★★ 而**不是**「上层必须用一个编码字符串」✗。
+      //    上层**不该做**的是 `if (kind === 'group') …` 这种**逻辑分叉** ✗；
+      //    把 `group_id` 直接交给工具、让 adapter 去拼，**完全合规** ✓✓。
+      //
+      //    ★ 实测（2026-10-16）：她自然地填了 `{"group_id":"728636404", …}` ✓ ——
+      //    ★ 而工具要的是 `target` ✗ ⇒ DSH 报 `missing required property "target"` ✓。
+      //    **她的直觉是对的，我的形状是错的** ✓。
+      //
+      //    ★ `target` 只该用在"**真的可能群、也可能私聊**"的地方 ✓
+      //    （`qq_send_message` / `qq_read` / `qq_send_image` / `qq_recall_message` ✓），
+      //    ★ 而 `qq_list_group_members` 一直用的是 `group_id` ✓ —— **仓库里本就有正确先例** ✓。
+      group_id: {
+        type: 'string',
+        required: true,
+        description: 'The group id, digits only.',
+      },
       user_id: {
         type: 'string',
         description: 'QQ number of the member to mute, or "all" for the whole group.',
@@ -742,9 +758,9 @@ export function apply(ctx: Context, config: Config): void {
       }],
     },
     async execute(args) {
-      const target = parseTarget(args.target)
-      if (target === undefined || target.kind !== 'group') {
-        return { ok: false, reason: `target must be "group:<id>", got "${args.target}"` }
+      const groupId = String(args.group_id ?? '').trim()
+      if (!/^\d+$/.test(groupId)) {
+        return { ok: false, reason: `group_id must be digits only, got "${groupId}"` }
       }
       const raw = String(args.user_id ?? '').trim()
       const user: number | 'all' = raw === 'all' ? 'all' : Number(raw)
@@ -753,7 +769,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       const duration = Math.max(0, Math.trunc(args.duration ?? 0))
       try {
-        await ctx.qq.call('set_group_ban', { group_id: Number(target.id), user_id: user, duration })
+        await ctx.qq.call('set_group_ban', { group_id: Number(groupId), user_id: user, duration })
         return { ok: true, muted: user === 'all' ? 'all' : String(user), duration }
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }
@@ -1164,8 +1180,13 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_group_muted',
     description: 'List the members of a QQ group who are still muted.',
     parameters: {
-      // ★ 同 `qq_set_group_ban`：用 `TARGET_PARAM` ✓ —— 它带例子，措辞与老工具一致 ✓。
-      target: TARGET_PARAM,
+      // ★ 同 `qq_set_group_ban`：★ **直接照协议端形状** `{group_id}` ✓ ——
+      //   这里**只能是群** ✗，套 `target:"group:<id>"` 只会逼调用方记一个编码 ✗。
+      group_id: {
+        type: 'string',
+        required: true,
+        description: 'The group id, digits only.',
+      },
     },
     output: {
       schema: {
@@ -1196,12 +1217,14 @@ export function apply(ctx: Context, config: Config): void {
       }],
     },
     async execute(args) {
-      const target = parseTarget(args.target)
-      if (target === undefined || target.kind !== 'group') {
-        return { ok: false, reason: `target must be "group:<id>", got "${args.target}"` }
+      // ★ 同 `qq_set_group_ban`：★ 直接照协议端形状 `{group_id}` ✓ —— 这里**只能是群** ✗，
+      //   所以不该套 `target:"group:<id>"` ✗（★ 那会逼调用方记一个编码 ✓）。
+      const groupId = String(args.group_id ?? '').trim()
+      if (!/^\d+$/.test(groupId)) {
+        return { ok: false, reason: `group_id must be digits only, got "${groupId}"` }
       }
       try {
-        const result = await ctx.qq.call('get_group_shut_list', { group_id: Number(target.id) })
+        const result = await ctx.qq.call('get_group_shut_list', { group_id: Number(groupId) })
         const muted = (result ?? []).map(item => ({
           userId: String(item.user_id ?? ''),
           nickname: String(item.nickname ?? ''),

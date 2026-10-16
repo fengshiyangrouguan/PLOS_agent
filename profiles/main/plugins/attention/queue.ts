@@ -56,35 +56,6 @@ function sharesSource(left: PerceptionNotice, right: PerceptionNotice): boolean 
   return left.signals.some(signal => right.signals.some(other => other.source === signal.source))
 }
 
-/**
- * ★★ 一份感知条目的**内容指纹** ✗ —— 用来认出"**这就是同一条简报**" ✓✓。
- *
- * ## 为什么需要它（2026-10-16 实测的 bug ✗）
- *
- * ★ `push()` 里的"同来源合并"（见 {@link sharesSource} ✓）**只在队里还有那条时**生效 ✗。
- * ★★ 而 `attention.attempt()` 会**立刻 `drain()`** ✗（她一闲下来就投 ✓）——
- * ⇒ ★★★ **于是"刚投出去的那条"离开了队列** ✗ ⇒
- * ★★★★ **紧接着 `tick()` 又产出一份**内容相同**的 notice ✗ ⇒ **无法与它合并** ✗✓
- * ⇒ ★★★★★ **结果她被投了两遍** ✗ —— ★ 第二轮里 `qq_read` 只能读出
- * `Nothing new there.` ✓（★ 那批消息已经在第一轮读掉了 ✓✓）。
- *
- * ## 粒度：为什么不能只用 `source` ✗
- *
- * ★ 只用 `source` 会**丢真消息** ✗：★ 同一个会话**来了新消息**时 `source` 不变 ✗✓。
- * ⇒ ★★ 所以带上 **`kind` ＋ `data`** ✓✓ —— ★ 而 `data` 正是模板取值
- * （★ 如 `{ n: 4 }` ＝ "4 条新消息" ✓）⇒ ★★ **来了新消息 ⇒ `n` 变 ⇒ 指纹变 ⇒ 不会误丢** ✓✓；
- * ★ **纯重复的 `tick()` ⇒ 完全一致 ⇒ 指纹相同 ⇒ 丢弃** ✓✓。
- *
- * @param notice - 要算指纹的条目。
- * @returns 指纹字符串（★ 信号顺序不影响结果 —— 已排序 ✓）。
- */
-export function fingerprintOf(notice: PerceptionNotice): string {
-  return notice.signals
-    .map(signal => `${signal.domain}|${signal.source}|${signal.kind}|${JSON.stringify(signal.data)}`)
-    .sort()
-    .join('\n')
-}
-
 /** 队列里的一个待交付项。 */
 export interface PendingItem {
   /** 感知条目。 */
@@ -104,14 +75,6 @@ export class PendingQueue {
   readonly #capacity: number
 
   /**
-   * ★★ **最近一次 `drain()` 出去的那条的指纹** ✗ —— 见 {@link fingerprintOf} 的注释 ✓。
-   *
-   * ★ 只记**一条**就够 ✓：★ 重复产出的那几份内容都一样 ✗ ⇒ 每一份都与它比即可 ✓✓。
-   * ★★ 而 `clear()` **不清它** ✗ —— ★ 清空队列不等于"刚投出去的那条可以重投" ✓✓。
-   */
-  #lastDrained: string | undefined
-
-  /**
    * @param capacity - 队列上限，超出时丢最旧的（**0 级除外**，它本来就只留一条）。
    */
   constructor(capacity = 32) {
@@ -128,13 +91,6 @@ export class PendingQueue {
    * @param now - 入队时间（毫秒）。注入以便自检。
    */
   push(notice: PerceptionNotice, now: number = Date.now()): void {
-    // ★★ ⓪ **与"刚投出去的那条"比** ✗✓ —— ★ 2026-10-16 加 ✓。
-    //
-    //   为什么放在最前：★ 那条已经**不在队列里**了 ✗（`attempt()` 一 drain 就投 ✓）⇒
-    //   下面的"同来源合并"**看不到它** ✗✓。★ 而 `perception.tick()` 是"拉当前状态" ✓
-    //   ⇒ ★★ 同一次 `tick()` 风暴会产出**内容相同**的多份 ✗ —— 这里把它们挡掉 ✓✓。
-    if (this.#lastDrained !== undefined && fingerprintOf(notice) === this.#lastDrained) return
-
     // ★ ① 同来源合并（用户定案）：命中已有条目就**整条换新、位置留旧的**。
     //
     //   "换新不丢内容"的理由：`pull()` 返回的是**当前状态**而不是增量日志
@@ -194,8 +150,6 @@ export class PendingQueue {
     if (best === undefined) return undefined
     const index = this.#items.indexOf(best)
     if (index >= 0) this.#items.splice(index, 1)
-    // ★★ 记住它的指纹 ✗ —— ★ 好让紧接着重产出的那一份在 `push()` 里被挡掉 ✓✓。
-    this.#lastDrained = fingerprintOf(best.notice)
     return best
   }
 

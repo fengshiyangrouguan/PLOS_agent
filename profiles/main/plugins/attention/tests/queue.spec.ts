@@ -231,5 +231,60 @@ function tagOf(item: { notice: PerceptionNotice } | undefined): string | undefin
   check('★ 合并后优先级取新的', queue.peek()?.notice.highest, 20)
 }
 
+// ── ★★ "刚投出去的那条"不许重投（2026-10-16 修的那个 bug ✗）──────────
+//
+// ★ 实测形状：★ `perception.tick()` 是"拉**当前状态**" ✓ ⇒ 同一次风暴会产出
+//   **内容相同**的多份 notice ✗；★ 而 `attention` 一 `drain()` 就投 ✗ ⇒
+//   那条**离开了队列** ⇒ ★★ 下面的"同来源合并"看不到它 ⇒ **她被投两遍** ✗✓
+//   ⇒ ★ 第二轮里 `qq_read` 只能读出 `Nothing new there.` ✓。
+{
+  // ★ 造一份带 `data` 的条目 —— ★ 指纹要能看出"新消息条数变了" ✗。
+  const withCount = (tag: string, n: number, source = tag): PerceptionNotice => ({
+    at: 0,
+    text: `${tag}:${String(n)}`,
+    signals: [{ kind: 'messages', data: { n }, source, domain: 'QQ', priority: 20, line: tag }],
+    highest: 20,
+    quiet: false,
+  })
+
+  const queue = new PendingQueue()
+  queue.push(withCount('甲', 4), 100)
+  const taken = queue.drain()
+  check('★ drain 取走队首', tagOf(taken), '甲:4')
+  check('★ drain 后队列空', queue.size, 0)
+
+  // ★★ 这就是修的那个：★ 紧接着 `tick()` 又产出一份**完全相同**的 ⇒ 必须被丢 ✗。
+  queue.push(withCount('甲', 4), 200)
+  check('★★ 刚投出去的那条**不许重投**（否则她白跑一轮 ✗）', queue.size, 0)
+
+  // ★★ 但**真的来了新消息**时不能丢 ✗ —— `data.n` 变了 ✓。
+  queue.push(withCount('甲', 5), 300)
+  check('★★ 同一会话**来了新消息**（`n` 变了）⇒ 照常入队 ✓', queue.size, 1)
+
+  // ★ 而不同会话也不受影响 ✓。
+  const queue2 = new PendingQueue()
+  queue2.push(withCount('甲', 4), 100)
+  queue2.drain()
+  queue2.push(withCount('乙', 4), 200)
+  check('★ 换了会话（来源不同）⇒ 照常入队 ✓', queue2.size, 1)
+
+  // ★ 信号顺序不该影响指纹 ✓。
+  const twoSignals = (first: string, second: string): PerceptionNotice => ({
+    at: 0,
+    text: 'x',
+    signals: [
+      { kind: 'k', data: { a: 1 }, source: first, domain: 'QQ', priority: 20, line: first },
+      { kind: 'k', data: { a: 1 }, source: second, domain: 'QQ', priority: 20, line: second },
+    ],
+    highest: 20,
+    quiet: false,
+  })
+  const queue3 = new PendingQueue()
+  queue3.push(twoSignals('甲', '乙'), 100)
+  queue3.drain()
+  queue3.push(twoSignals('乙', '甲'), 200)   // ★ 顺序反了，内容一样 ✓
+  check('★ 信号顺序不影响指纹（同一份仍被丢 ✗）', queue3.size, 0)
+}
+
 console.log(`\n通过 ${passed}，失败 ${failed}`)
 if (failed > 0) process.exitCode = 1

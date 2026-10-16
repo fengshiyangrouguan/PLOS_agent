@@ -134,10 +134,13 @@ export function apply(ctx: Context): void {
       'Loading takes effect from your next step; it lasts for this turn only.',
     ].join(' '),
     parameters: {
-      package: {
-        type: 'string',
+      packages: {
+        type: 'array',
         required: true,
-        description: `Package name. One of: ${TOOL_PACKAGES.map(item => item.name).join(', ')}.`,
+        items: { type: 'string' },
+        description: `One or more package names. Any of: ${TOOL_PACKAGES.map(item => item.name).join(', ')}. `
+          + 'Pass every package you need in ONE call: loading them together costs a single '
+          + 'prompt-cache break, while loading them one at a time costs one break each.',
       },
     },
     output: {
@@ -147,29 +150,43 @@ export function apply(ctx: Context): void {
         properties: {
           ok: { type: 'boolean', required: true },
           reason: { type: 'string' },
+          packages: { type: 'array', items: { type: 'string' } },
           tools: { type: 'array', items: { type: 'string' } },
         },
       },
       render: (_args, value) => [{
         type: 'text',
         text: value.ok
-          ? `Loaded. These tools are usable from your next step: ${(value.tools ?? []).join(', ')}`
-          : `Could not load that package: ${value.reason ?? 'unknown reason'}`,
+          ? `Loaded ${(value.packages ?? []).join(', ')}. `
+            + `Usable from your next step: ${(value.tools ?? []).join(', ')}`
+          : `Could not load: ${value.reason ?? 'unknown reason'}`,
       }],
     },
     async execute(args) {
-      const wanted = String(args.package ?? '').trim()
-      const found = packageOf(wanted)
-      if (found === undefined) {
-        // ★ 报错要**列出合法值** ✓ —— 否则她只能瞎试 ✗。
-        return {
-          ok: false,
-          reason: `no package named "${wanted}"; known packages: `
-            + TOOL_PACKAGES.map(item => item.name).join(', '),
-        }
+      const known = TOOL_PACKAGES.map(item => item.name).join(', ')
+      const wanted = (Array.isArray(args.packages) ? args.packages : [])
+        .map(name => String(name).trim())
+        .filter(name => name !== '')
+      if (wanted.length === 0) {
+        return { ok: false, reason: `name at least one package; known packages: ${known}` }
       }
-      active.add(found.name)
-      return { ok: true, tools: [...found.tools] }
+      // ★★ **先全部校验、再全部生效** ✗ —— 不要"取了一半才发现有个拼错" ✓
+      //    （★ 那会留下一个"取到的包和她的预期不一致"的 turn ✓，比直接失败更难查 ✓）。
+      const unknown = wanted.filter(name => packageOf(name) === undefined)
+      if (unknown.length > 0) {
+        return { ok: false, reason: `unknown package(s): ${unknown.join(', ')}; known packages: ${known}` }
+      }
+      // ★ 去重（★ 同一个包写两遍不该算两次 ✓）。
+      const loaded: string[] = []
+      const tools: string[] = []
+      for (const name of wanted) {
+        const found = packageOf(name)
+        if (found === undefined || loaded.includes(found.name)) continue
+        active.add(found.name)
+        loaded.push(found.name)
+        tools.push(...found.tools)
+      }
+      return { ok: true, packages: loaded, tools }
     },
   }))
 }

@@ -222,6 +222,17 @@ check('★ 说明里**不含**动态内容（"取过哪些包"由查找工具的
   assert.ok(!text.includes('当前'), '不该写"当前" ✓')
 })
 
+check('★ 说明里讲了**一次可以取多个包**（★ 那样只断一次缓存 ✓）', () => {
+  const text = packagesSectionText()
+  assert.ok(text.includes('一次写几个'), '要告诉她可以一次写多个 ✓')
+})
+
+check('★ 说明里**不提"缓存"**（★ 那是实现细节，对她没意义 ✗ —— 说"更快" ✓）', () => {
+  const text = packagesSectionText()
+  assert.ok(!text.includes('缓存'), '对模型不该讲缓存 ✓')
+  assert.ok(text.includes('更快'), '要给她能理解的理由 ✓')
+})
+
 // ── ★★ 提示段（`tool:*`）跟着包走 ───────────────────────────────
 //
 // ★ 背景：`tcb` 的 `sections` 白名单里列着各工具的"什么时候用它"提示 ✓

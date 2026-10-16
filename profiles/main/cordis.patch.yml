@@ -73,6 +73,14 @@
           # 主模型：纯文本。`input` 不写 ⇒ 用 provider 的 defaultInput（['text']）。
           - id: deepseek-ai/DeepSeek-V3.2
             name: DeepSeek-V3.2
+            # ★★★ **必须写 `contextWindow`** —— 不写就用 `defaultContextWindow`（**262144** ✓）
+            #   ⇒ 溢出检测（`llm-pi-ai/src/stream.ts` 的 `isContextOverflow` ✓）会**太晚**才报 ✗
+            #   ⇒ 请求超过真实上限就直接被 API 拒 ✗（**硬失败** ✓，而压缩／降级根本没机会跑 ✗）。
+            #
+            # ★ 硅基模型页：**Context length 164K** ／ **Max Tokens 164K**（V3 / V3.2 / V3.1 三者相同 ✓）。
+            #   取 **163840**（= 160×1024 ✓）而**不是**整 164K ⇒ **留一点余量** ✓
+            #   —— 早判只是多压一次（费点 tokens ✓），晚报是请求被拒 ✗。
+            contextWindow: 163840
             maxTokens: 8192
           # ★ **同族轮换候选** —— 均衡（`llm-throttle`）在 `data/tcb.json` 的
           #   `main.models` 组里挑还有余量的那个。
@@ -88,6 +96,28 @@
             maxTokens: 8192
           - id: deepseek-ai/DeepSeek-V3
             name: DeepSeek-V3
+            # ★ 同 V3.2：硅基模型页 164K（见上面那段的说明 ✓）。
+            #   ⚠️ `maxTokens`（**输出**上限 ✓）与 `contextWindow`（**输入＋输出总量** ✓）
+            #     是**两个不同的数** ✗ —— 别混 ✓。这里 `maxTokens` 是 provider 默认 ✓，
+            #     真正生效的输出上限由 `data/tcb.json` 的 `maxTokens: 16384` 覆盖 ✓。
+            contextWindow: 163840
+            maxTokens: 8192
+          # ★ `main` 组的第三个候选（用户指定：**用 V3.1-Terminus 替掉 R1**）。
+          #
+          # ★★ **不声明就是坏的**：模型 id 不在 provider catalog 里 ⇒ 均衡换过去
+          #   那一轮**在出网之前就死** ⇒ 她醒着却不回话，**探针里连失败记录都没有**
+          #   （实测踩过两次 ✗）。
+          - id: deepseek-ai/DeepSeek-V3.1-Terminus
+            name: DeepSeek-V3.1-Terminus
+            # ★ 同 V3.2：硅基模型页 164K（见上面那段的说明 ✓）。
+            contextWindow: 163840
+            maxTokens: 8192
+          # ⚠️ `DeepSeek-R1` **仍声明着但已不在任何组里** —— 它是**推理模型**，
+          #   思考文本会吃掉输出预算 ⇒ 实测在 `maxTokens: 8192` 下**响应中途被截断**，
+          #   而**工具调用在推理之后才发** ⇒ 那一轮她只写了"我打算这样回应：…"就结束了 ✗
+          #   （这正是"她似乎没收到"的真因 ✓）。**别再把它放回 main 组** ✓
+          - id: deepseek-ai/DeepSeek-R1
+            name: DeepSeek-R1
             maxTokens: 8192
           # planner：写待办那条"恰好一行"的小模型（`interrupt_plan` 的快照 subagent）。
           #
@@ -402,6 +432,29 @@
         #   实战：查"合并转发解析失败"时，靠它抓到了协议端的原话
         #   `retcode 1400 · "message_id: expected a message id"`（那条错误在日志里
         #   一个字都没有，被 `attempt()` 吞了）。详见 `capture.ts` 的模块注释。
+        # ★ 现在**开着**（2026-10-15）—— 目标：定 **`sysemojis`（系统表情）在入站那一帧长什么样** ✓。
+        #
+        #   为什么需要它：出站把 `[表情：笑哭]` 发成 `face{id:237}` 被服务器拒 ——
+        #   `OIDB error 11000 on 0x9155_1: … msg: id 237 **sysemojis cfg not found**` ✗
+        #   ⇒ 老的那批（≤~200，微笑/呲牙/大哭…）走 `face` 没问题 ✓，
+        #   而新的那批（237 笑哭 / 243 大笑 / 262 吃瓜 / 264 狗头…）**不属于那套老编号** ✓
+        #   ⇒ ★ **要看她收到一个"笑哭"时的原始段**：
+        #        `{type:'face', data:{id}}`  ⇒ 那就该有办法发（可能另有 id 体系）
+        #        `{type:'mface', data:{…}}` ⇒ ★ 出站要发 `mface`（大概带 packId）
+        #   ⇒ **看完才知道，不猜** ✓（见 `pipeline/face.ts` 里新老混着的那张表 ✓）
+        #
+        # ★ 它已经完成过一次实战：查"合并转发解析失败"时靠它抓到协议端原话
+        #   `retcode 1400 · "message_id: expected a message id"`（那条在日志里
+        #   一个字都没有，被 `attempt()` 吞了）。详见 `capture.ts` 的模块注释。
+        # ★ **现在开着**（2026-10-15，抓通知帧）—— 目标：
+        #   ① 别人发**新说说**会不会有帧过来（⇒ 决定"说说 = 0 级信号"是走帧还是走轮询 ✓）
+        #   ② **加好友／加群申请**（`post_type=request` 的字段，尤其 `flag` 在哪 ✓）
+        #   ③ **退群通知**（`notice_type=group_decrease` 的字段名 ✓）
+        #   ★ 拿到真实帧之后再收紧 `qq/notice` / `qq/request` 的类型 ✓
+        # ★ 抓帧已完成（2026-10-15）⇒ **关掉** ✓
+        #   那次抓到的形状全部记在 `PLOS/docs/qq-notifications.md` ✓
+        #   （notice 11 帧 ＋ request 4 帧 ✓，含"`input_status` 是高频噪音"那条关键结论 ✓）。
+        #   ★ 要再抓：把 `enabled` 改回 `true` 即可 —— 落点 `$DSH_HOME/data/raw-frames.json` ✓。
         capture:
           enabled: false
           path: !!js "process.env.DSH_HOME + '/data/raw-frames.json'"
@@ -525,6 +578,34 @@
         cwd: ''
         greeting: !!js "process.env.QQ_RESIDENT_GREETING ?? ''"
 
+    # ⚠️⚠️ **不要用"同名 id 再写一行"的方式覆盖基线行 —— 那会打坏一整串依赖。**
+    #
+    # 实测（2026-10-15 15:16）：我加了一行
+    #
+    #     - id: sandbox-policy
+    #       config:
+    #         mode: danger-full-access
+    #
+    # 结果 dsh 直接把它**禁用**掉：
+    #
+    #     dsh: disabling profile plugin row "sandbox-policy":
+    #          its declared peer dependencies cannot be validated: Cannot read pro…
+    #
+    # ⇒ 根因是**补丁行也必须带 `name:`**（没有它，加载器认不出这是哪个插件、
+    #   于是验不了它的 peer 依赖 ⇒ 直接禁用 ✗）。
+    # ⇒ 而后果远不止那一行：`sandboxPolicy` 这个服务起不来 ⇒
+    #   **8 个插件 pending** ✗（`pwsh-sandbox` / `fs-sandbox` / `tool-pwsh` /
+    #   `tool-fs` / `permission` / `ptc-runtime` / `workflow-ptc` / `tool-workflow`）
+    #   ⇒ **她没有文件和 shell 工具** ✗✗
+    #
+    # ★ 所以权限**暂时仍走环境变量**（已验证可用）：
+    #
+    #     $env:DSH_PERMISSION_MODE='danger-full-access'
+    #
+    #   要改成配置驱动，得先弄清"补丁层如何正确地覆盖/替换一行同名基线行"
+    #   —— 是补上 `name:` 就够（那会不会变成两行同 id ✗），还是有别的机制
+    #   （例如基线下 `disabled: true` ＋ 换一个新 id ✗）。**弄清之前不要动它。**
+
     # ★ 出网自我限速 ＋ 同族模型均衡。
     #
     # 为什么必须开：硅基的限速**按模型**算，免费档主模型 TPM 只有 **100,000**，
@@ -551,3 +632,25 @@
       config:
         enabled: true
         residentSessionId: plos
+
+    # ★★ 工具包（渐进式披露）—— 把不常用的工具**收进包**，按需取用。
+    #
+    # 为什么：实测她的工具表有 **49 个**、`toolsTokens ≈ 5872`，而**每轮都带** ✗；
+    # ★ 更麻烦的是**她装不下** ✗（让她列举时只列到第 10 个 `qq_*` ✓，而那些工具其实是活的 ✓）。
+    # 做法见 `plugins/tool_packages/index.ts` 的模块注释 ＋ `PLOS/docs/decisions.md` TODO 13。
+    #
+    # ★ 它挂在 `system-prompt/assemble` 瀑布上筛 `result.tools`（`tcb.apply` 筛 `sections` ✓
+    #   用的是同一个瀑布 ✓）⇒ 平时她的工具表只剩常用的那 17 个 ＋ `find_tools` ✓。
+    #
+    # ⚠️ **那段说明的段名 `tool-packages` 必须列进 `data/tcb.json` 的 `sections`** ✗
+    #    —— 否则被 `tcb` 的白名单过滤掉，她就**看不到有哪些包** ✓。
+    - id: tool-packages
+      name: './plugins/tool_packages/index.ts'
+
+    # ⚠️ 临时探针：**只盯 planner 那一路**（`sessionId` 以 `interrupt-plan-` 开头），
+    # 把请求**全量**（messages/tools/model）与结局（`finish` 块的 failure）一起落盘
+    # 到 `%TEMP%\plos-planner.jsonl`。目标：那个复现不出来的
+    # `400 INVALID_REQUEST`（剩下的嫌疑是 **planner 自己的 messages**）。
+    # **用完即删**（连同 `_probe-planner.ts`）。
+    - id: probe-planner
+      name: './plugins/_probe-planner.ts'

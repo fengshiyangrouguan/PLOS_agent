@@ -134,6 +134,12 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_send_message',
     description: [
       'Send a text message to a QQ group or private chat.',
+      // ★★ 把 `at` 的两条坑写在她**一定会看到**的地方 ✗（2026-10-16 实测踩过 ✓）：
+      //   ① 她手里只有**昵称**，而 `at` 要 **QQ 号** ⇒ 得先去查 ✓；
+      //   ② ★ `at` 段**自己会渲染成 "@昵称"** ✗ ⇒ ★ 正文里**不要再写一遍** ✓（会重复 ✓）。
+      'To actually notify someone in a group, pass their **QQ number** in `at` — the mention',
+      'renders by itself, so do not also write "@name" in `text` (that duplicates it).',
+      'A nickname is not a QQ number: look the number up with qq_list_group_members first.',
       // ★ 长度控制（用户定案）—— 放在**工具描述**而不是 `text` 参数描述里：
       //   它是"怎么说话"的行为准则，不是字段格式。
       'In shallow, casual chat prefer short replies — usually 15–30 Chinese characters — sent as',
@@ -146,16 +152,20 @@ export function apply(ctx: Context, config: Config): void {
       text: {
         type: 'string',
         required: true,
-        description: 'Message body. Plain text; emoji markers like [表情：笑哭] are converted back to QQ faces.',
+        description: 'Message body. Plain text; emoji markers like [表情：笑哭] are converted back to QQ faces. '
+          + 'Do not write the @name here when you also pass `at` — the mention renders on its own.',
       },
       at: {
         type: 'array',
-        description: 'QQ ids to mention. Ignored in private chats. Use "all" to mention everyone.',
+        description: 'QQ **numbers** (not nicknames) to mention, e.g. ["352699068"]. These render as "@nickname" '
+          + 'by themselves, so leave the @name out of `text`. Ignored in private chats. '
+          + 'Use "all" to mention everyone. Look a number up with qq_list_group_members.',
         items: { type: 'string' },
       },
       reply_to: {
         type: 'string',
-        description: 'Message id to quote. Use the id from a rendered message such as "(msg_id=123)".',
+        description: 'Message id to quote, from a rendered message such as "(msg_id=123)". '
+          + 'Only recent messages you actually received can be quoted — an old or unsent id is dropped silently.',
       },
     },
     output: {

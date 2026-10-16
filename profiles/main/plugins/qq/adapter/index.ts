@@ -645,15 +645,43 @@ export class QqAdapter extends Service {
   }
 
   /**
+   * 查一条消息的**发送者 QQ 号** ✗ —— ★ 引用回复时用它补 `at` ✓（见 {@link sendText} ✓）。
+   *
+   * ★ 查不到就返回 `undefined` ✓ —— 那时 `sendText` **只发 `reply`** ✗，
+   * ★★ 而不是让整条消息因为补不出 `@` 就发不出去 ✓✓。
+   *
+   * @param messageId - 被引用的消息 id。
+   * @returns 发送者 QQ 号；查不到返回 `undefined` ✓。
+   */
+  private async replyAuthor(messageId: string): Promise<string | undefined> {
+    try {
+      const detail = await this.getMessage(messageId)
+      const userId = detail.sender?.user_id
+      return userId === undefined ? undefined : String(userId)
+    } catch {
+      // ★ 查不到 ⇒ 不补 @（★ 只发 reply ✓）。★ 与 `resolveReply` 的"查不到就留空"同一取舍 ✓。
+      return undefined
+    }
+  }
+
+  /**
    * 发纯文本（含可选 @ 与引用）。
    *
-   * ★ **只压 `reply` 段** ✗ —— ★★ **不自动补 `at`** ✓✓（2026-10-16 实测 ✓）。
+   * ★★ **群里的引用回复 ＝ `reply` 段 ＋ `at` 段** ✗✓ —— ★ 复刻 QQ 自己的行为 ✓。
    *
-   * 为什么：★ 曾按"复刻 QQ 的引用即点名"补过一个 `at` ✓ ——
-   * ★★ 而实测**群里显示两个 `@`** ✗✗（★ 引用块自己就带一个 ✓ ——
-   * ★ 她的 `text` 里并没有 `@`，所以那两个都来自段 ✓✓）。
-   * ⇒ ★ **协议端显示引用时本来就会 @ 被回复者** ✗ ⇒ ★ **再补就是重复** ✓✓。
-   * ★ 所以回到最简：★ **要 @ 谁就显式传 `at`** ✓，引用只管引用 ✓。
+   * ## 依据（★ 2026-10-16 用入站样本定的 ✓，别再凭印象改 ✗）
+   *
+   * ★ 数了**入站**里"别人回复"的消息：★ 含 `[回复` 的 **67 行** ✗ ——
+   * ★★ 其中 **61 行紧跟一个 `@某某`** ✓✓（★ 91% ✓）；
+   * ★ 而**没跟 @ 的 6 行全是私聊** ✗（★ 私聊没有 @ 语义 ✓）。
+   * ⇒ ★ 实例：★ `[回复宮的消息:…(msg_id=…)]:@宮  big胆` ✓✓
+   *
+   * ★★ 所以 QQ 自己就是**群里发 `reply` ＋ `at`、私聊只发 `reply`** ✗✓ ——
+   * ★ 我们照做 ✓（★ 只在群 ✓ ＋ 与显式 `at` **按 QQ 号去重** ✗，不会发两个 ✓）。
+   *
+   * ⚠️ 曾经因为"群里看到两个 `@`"而撤掉过它 ✗ —— ★★ 那次的解释是：
+   * ★ **协议端只发一次 `at`** ✓（★ 入站样本就是证据 ✓），
+   * ★★ 多出来的那个是**客户端显示引用块时自己带的** ✗ ⇒ **不该由我们迁就** ✓✓。
    *
    * @param target - 群或私聊。
    * @param text - 正文。
@@ -666,13 +694,20 @@ export class QqAdapter extends Service {
     options: { at?: readonly string[], replyTo?: string } = {},
   ): Promise<string> {
     const segments: Segment[] = []
-    // ★ 只压 `reply` 段 ✗ —— ★★ **不自动补 `at`** ✓（★ 实测那样会显示两个 `@` ✓，见方法注释 ✓）。
+    // ★★ **群里的引用回复 ＝ `reply` ＋ `at`** ✗✓（★ 依据见方法注释 ✓）。
+    //   ★ 与显式 `at` **按 QQ 号去重** ✗ ⇒ 同一个号不会发两遍 ✓。
+    //   ⚠️ 查不到那条消息（太旧／不是自己收过的 ✓）⇒ ★ **只发 `reply`** ✗，不让整条失败 ✓。
+    const atIds = new Set(options.at ?? [])
     if (options.replyTo !== undefined) {
       segments.push({ type: 'reply', data: { id: options.replyTo } })
+      if (target.kind === 'group') {
+        const author = await this.replyAuthor(options.replyTo)
+        if (author !== undefined && author !== '' && !atIds.has(author)) atIds.add(author)
+      }
     }
     // 私聊没有 @ 语义，静默跳过（沿用实验期行为）。
     if (target.kind === 'group') {
-      for (const userId of options.at ?? []) {
+      for (const userId of atIds) {
         segments.push({ type: 'at', data: { qq: userId } })
         segments.push({ type: 'text', data: { text: ' ' } })
       }

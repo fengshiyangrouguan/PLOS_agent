@@ -96,12 +96,37 @@ export const Config: z<Config> = z.object({
   imageReadyWaitMs: z.natural().default(60_000),
 })
 
-/** `@` 白羽的优先级。 */
-const PRIORITY_MENTION = 20
-/** 私聊的优先级。 */
+/**
+ * `@` 白羽的优先级 —— ★★ **群聊里的 @** ✗。
+ *
+ * ★ **15**（2026-10-16 从 20 降下来 ✓，用户定 ✓）—— ★★ 意图：★ **让群 @ 低于私聊** ✓✓。
+ *
+ * ## 为什么（现象与推理）
+ *
+ * ★ 原来群 @ 与私聊**同为 20** ✗ ⇒ ★ 在 `attention` 的仲裁里（`preempt.ts` ✓）：
+ * ★★ **群 @ 与私聊有同样的力量去打断她正在做的事** ✗ ——
+ * ★ 实测她**在一轮里连着处理了 8 件事** ✗（★ 群 ✓ 私聊 ✓ 回复 ✓ 建记忆文件 ✓），
+ * 看起来像"**被反复插队**"✓。
+ *
+ * ⇒ ★ 降到 15 之后：★ **私聊（20）能打断群 @（15）带来的那一轮** ✓，
+ * ★★ **反过来不能** ✓✓ —— ★ 而两者都仍高于普通群消息（0 ✓）。
+ */
+const PRIORITY_MENTION = 15
+/** 私聊的优先级。★ **保持 20** ✓ —— 它高于群 @（15 ✓）。 */
 const PRIORITY_PRIVATE = 20
 /** 普通群消息 —— **0 就是不产生自己的唤醒**，只搭下一次唤醒的便车。 */
 const PRIORITY_GROUP = 0
+
+/**
+ * ★★ **"立刻催一次拉取"的那条线** ✗ —— ★ **独立于 `PRIORITY_MENTION`** ✓。
+ *
+ * ⚠️ 为什么要独立：★ 这个判据原先写成 `mapped.priority >= PRIORITY_MENTION` ✗ ——
+ * ★★ 那是**借来的常量** ✓：它想说"20 级那么要紧 ⇒ 别等闲时定时器"✓，
+ * ★ 却把群 @ 的级别**当成了标准** ✗。
+ * ⇒ ★★ 群 @ 一降到 15，这条线会**悄悄跟着降** ✗✓（★ 而它的语义没变 ✓）。
+ * ★ 所以现在写死 **20** ✓ —— ★ 与 `notice.ts` 的 `PRIORITY_DIRECT` 同值 ✓✓。
+ */
+const PRIORITY_TICK_NOW = 20
 
 /**
  * 唤醒的防抖窗口（毫秒）。
@@ -471,7 +496,9 @@ export function apply(ctx: Context, config: Config): void {
       if (oldest !== undefined) pending.delete(oldest)
     }
     // ★ 20 级 ⇒ **立刻催一次拉取** ✓ —— 她这一轮就该看见，不必等闲时定时器 ✓。
-    if (mapped.priority >= PRIORITY_MENTION) {
+    //   ★★ 用 `PRIORITY_TICK_NOW` 而**不是** `PRIORITY_MENTION` ✗ ——
+    //   后者是"群 @"的级别 ✓，拿它当这条线会让线随群 @ 一起漂 ✓（见常量注释 ✓）。
+    if (mapped.priority >= PRIORITY_TICK_NOW) {
       void ctx.perception.tick().catch(() => { /* tick 失败不影响攒列表 ✓ */ })
     }
   }

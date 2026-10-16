@@ -14,8 +14,9 @@
  * 所以 `apply(agentCtx, tcb)` 在**那个 agent 自己的 scope** 上挂两个贡献：
  *
  * 1. **白名单过滤器** —— 过滤 `assembly.sections`。**没列出来的就不进。**
- * 2. **人设段落** —— 注册成 `deployment:persona-suffix`（`PERSONA_SUFFIX_SECTION`，
- *    ★ **order 10200 ＝ 最后** ✓ —— 2026-10-16 从 `persona-prefix` 挪过来的 ✓）。
+ * 2. **人设段落** —— 注册成 `deployment:persona-prefix`（`PERSONA_PREFIX_SECTION`，
+ *    ★ **order 0 ＝ 最前** ✓ —— ★ 2026-10-16 曾在 `persona-suffix` 上试过一轮，
+ *    实测**无效** ⇒ 已改回 ✓，原因见下面那个常量的注释 ✓）。
  *    **同名才顶得掉**，这是 DSH 自己让 preset 覆盖部署人设的机制。
  *
  * **不需要改 DSH，也不需要另造机制。**
@@ -51,26 +52,28 @@ declare module '@deepseek-ai/cordis' {
 
 /** 人设槽的段落名 —— **用常量，别写字面量**。 */
 /**
- * 人设槽的名字 —— ★★ **用末尾那个槽** ✗（`SECTION_ORDERS.DEPLOYMENT_PERSONA_SUFFIX = 10200` ✓）。
+ * 人设槽的名字 —— ★★ **回到最开始的位置** ✗（`SECTION_ORDERS.DEPLOYMENT_PERSONA_PREFIX = 0` ✓）。
  *
- * ## 为什么从 `PREFIX` 换成 `SUFFIX`（2026-10-16 实测决定）
+ * ## 走过的一段弯路（2026-10-16，留作记录 ✓）
  *
- * ★ 原来的槽是 `deployment:persona-prefix`（**order 0** ✗ —— 紧跟在
- * `harness:identity` 之后，★ 而那之后还有 **几千** 的 `TOOL_*` 段 ✗）。
+ * ★ 先是从这里挪到了 `deployment:persona-suffix`（order **10200** ＝ 最后 ✗），
+ * 理由是"**V3 系模型对靠近末尾的指令更服从**"✗ —— ★ 而实测**无效** ✓：
+ * 挪位前后各抽两组思考，措辞**没有可辨的变化** ✗（★ 助手腔依旧 ✓）。
  *
- * ★★ 实测发现她的措辞是**纯本体风格** ✗（"作为AI，我应该避免……" ✓／时间播报 ✓／
- * 工作汇报 ✓／列表癖 ✓），★ 而人设给的性格（腹黑 ✓ 毒舌 ✓ 调皮 ✓）**没进语气** ✗✓。
- * ⇒ ★ 假设：★ **V3 系模型对靠近末尾的指令更服从** ✗ ⇒ 末尾的工具说明压过了开头的人设 ✓。
+ * ★★ 真正的原因后来才看清 ✗（★ 见 `PLOS/docs/thinking-audit-2026-10-16.md` ✓）：
+ * ★ 她有一个**固定的思考模板** ✗ —— 「描述群里发生什么」＋「作为AI，我应该避免参与」＋
+ * 「今天的工作总结」＋「时间播报」＋「待办列表」✓ —— ★ 而那**不是位置能改的** ✗✓。
+ * ★★ 更根本的是**信息比例** ✗：★ 模型每轮看到**工具 schema 16,343 字符** ✗ ＋
+ * **提示词里 2,454 字符的工具契约** ✗，★ 而**人设只有 1,397 字符** ✓
+ * ⇒ ★★★ **约 13 : 1** ✗✓ —— ★ 那才是"她像助手"的来源 ✓。
  *
- * ⇒ ★★ 所以把**整份人设**挪到**最后一个槽**（`:10200` ✓ —— 它后面没有任何段 ✓✓）。
- * ★ 换名字的另一个效果：★ 全局那个空的 `PREFIX` 槽**不再被替换** ✗，但它本来就是空串 ✓（无害 ✓）。
- *
- * ⚠️ 这是一次**实验** ✗ —— ★ 若语气没变，**退回 `PREFIX` 即可** ✓（只需改这两行 ✓）。
+ * ⇒ ★ **所以：位置改回来** ✓（★ 用户在看过 dump 之后定的 ✓），
+ * ★★ **真正的对策是削减工具信息 ＋ 把人设写得更可执行** ✓✓。
  */
-const PERSONA_SUFFIX_SECTION = 'deployment:persona-suffix'
+const PERSONA_PREFIX_SECTION = 'deployment:persona-prefix'
 
-/** 人设槽的 order。★ 对应 `SECTION_ORDERS.DEPLOYMENT_PERSONA_SUFFIX` ✓ —— **排在最后** ✓。 */
-const PERSONA_SUFFIX_ORDER = 10200
+/** 人设槽的 order。★ 对应 `SECTION_ORDERS.DEPLOYMENT_PERSONA_PREFIX` ✓ —— **在最前** ✓。 */
+const PERSONA_PREFIX_ORDER = 0
 
 /**
  * TCB 目录设施，注册为 `ctx.tcb`。
@@ -215,8 +218,8 @@ export class TcbRegistry extends Service {
       agentCtx.on('agent/request', async (_payload, next) => ({ ...await next(), ...sampling }))
     }
 
-    // ③ 人设：注册成 `deployment:persona-suffix`（**order 10200 = 最后** ✓）——
-    //    同名才会替换而不是重复 ✓；★ 换到末尾是 2026-10-16 的实验 ✓（见常量注释 ✓）。
+    // ③ 人设：注册成 `deployment:persona-prefix`（**order 0 ＝ 最前** ✓）——
+    //    同名才会替换而不是重复 ✓；★ 曾在 `persona-suffix` 上试过一轮，实测无效 ⇒ 改回 ✓。
     if (tcb.identity !== undefined && tcb.identity !== '') {
       let text: string
       try {
@@ -230,8 +233,8 @@ export class TcbRegistry extends Service {
         return
       }
       agentCtx.systemPrompt.section({
-        name: PERSONA_SUFFIX_SECTION,
-        order: PERSONA_SUFFIX_ORDER,
+        name: PERSONA_PREFIX_SECTION,
+        order: PERSONA_PREFIX_ORDER,
         text,
       })
     }

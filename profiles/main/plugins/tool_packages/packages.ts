@@ -93,9 +93,13 @@ export const TOOL_PACKAGES: readonly ToolPackage[] = [
   },
   {
     name: 'misc',
-    summary: '其他：看一眼图片里有什么。',
-    when: '需要理解一张图片的内容时。',
-    tools: ['read_image'],
+    // ★★ `pwsh` 在这里（2026-10-16 移入 ✓）—— ★ 它一个就占 **3,495 字符**的 schema ✗，
+    //   是全部 18 个工具里最大的一个 ✓✓ —— 而实测她**一天只调 4 次** ✗。
+    //   ⇒ ★ 收进包最划算 ✓（★ 取一次包，换掉天天带着的 3,495 字符 ✓✓）。
+    //   ★ 而它的"什么时候用"段名是 `tool:pwsh` ✓ ⇒ ★ 一并进 `PACKAGE_SECTIONS` ✓。
+    summary: '其他：跑一条本地命令、看一眼图片里有什么。',
+    when: '需要在电脑上执行命令（查文件、跑脚本、看环境），或者需要理解一张图片的内容时。',
+    tools: ['pwsh', 'read_image'],
   },
 ]
 
@@ -153,6 +157,8 @@ export const PACKAGE_SECTIONS: Readonly<Record<string, readonly string[]>> = {
   agents: ['tool:subagent'],
   jobs: ['tool:jobs'],
   memory: ['tool:session-query'],
+  // ★ `pwsh` 的工具进了 `misc` 包 ⇒ ★ 它的"什么时候用"段也要跟着走 ✓（2026-10-16 ✓）。
+  misc: ['tool:pwsh'],
 }
 
 /**

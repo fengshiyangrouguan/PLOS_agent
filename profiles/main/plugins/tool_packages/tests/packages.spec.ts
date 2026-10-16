@@ -71,11 +71,11 @@ const REAL_TOOL_TABLE: readonly string[] = [
   'web_fetch', 'web_search', 'workflow', 'write',
 ]
 
-/** ★ 留日常的 17 个（用户定案 ✓）。 */
+/** ★ 留日常的 **16** 个（★ 2026-10-16：`pwsh` 移进了 `misc` 包 ✗ —— 见包表注释 ✓）。 */
 const DAILY: readonly string[] = [
   'qq_send_message', 'qq_send_image', 'qq_recall_message', 'qq_read', 'qq_chats',
   'qq_search', 'qq_wait_message', 'read', 'write', 'edit', 'glob', 'grep',
-  'web_search', 'web_fetch', 'pwsh', 'skill', 'set_idle_wake_interval',
+  'web_search', 'web_fetch', 'skill', 'set_idle_wake_interval',
 ]
 
 const packaged = TOOL_PACKAGES.flatMap(item => item.tools)
@@ -91,7 +91,7 @@ check('★★ 卸载的 4 个**也真实存在**（否则说明抄错了 ✓）'
   assert.deepEqual(missing, [], `不存在：${missing.join(', ')}`)
 })
 
-check('★★ 留日常的 17 个**也真实存在**', () => {
+check('★★ 留日常的 16 个**也真实存在**', () => {
   const missing = DAILY.filter(name => !REAL_TOOL_TABLE.includes(name))
   assert.deepEqual(missing, [], `不存在：${missing.join(', ')}`)
 })
@@ -114,10 +114,10 @@ check('★★ 卸载的 4 个**不在任何包里**（否则"卸载"名不副实
   assert.deepEqual(leaked, [])
 })
 
-check('★ 账目对上：28 进包 ＋ 4 卸载 ＋ 17 日常 ＋ 1 查找 = 50', () => {
-  assert.equal(packaged.length, 28)
+check('★ 账目对上：29 进包 ＋ 4 卸载 ＋ 16 日常 ＋ 1 查找 = 50', () => {
+  assert.equal(packaged.length, 29)
   assert.equal(UNINSTALLED_TOOLS.length, 4)
-  assert.equal(DAILY.length, 17)
+  assert.equal(DAILY.length, 16)
   assert.equal(REAL_TOOL_TABLE.length + 1, 50)
 })
 
@@ -154,21 +154,33 @@ check('★ 一个包都没取 ⇒ 包里的全藏 ＋ 卸载的全藏', () => {
   assert.ok(hidden.has('create_goal'), '卸载的该藏')
   assert.ok(!hidden.has('qq_send_message'), '日常的不该藏 ✓')
   assert.ok(!hidden.has(FIND_TOOLS_NAME), '★ 查找工具自己**永远可见** ✓')
-  assert.equal(hidden.size, 32, '28 包内 ＋ 4 卸载 = 32 ✓')
+  // ★★ 由包表**算出来** ✗ —— ★ 硬编码数字每改一次分类就要跟着改 ✓
+  //    （2026-10-16 把 `pwsh` 移进 `misc` 时，这三条一起挂了 ✓）。
+  assert.equal(hidden.size, TOOL_PACKAGES.flatMap(item => item.tools).length + UNINSTALLED_TOOLS.length)
 })
 
 check('★ 取了 qzone ⇒ 那 5 个**不藏**（加回来了 ✓），别的包照样藏', () => {
   const hidden = hiddenTools(new Set(['qzone']))
   assert.ok(!hidden.has('qq_qzone_post'), '取过的该可见 ✓')
   assert.ok(hidden.has('qq_approve_friend'), '没取的照样藏 ✓')
-  assert.equal(hidden.size, 27, '32 − 5 = 27 ✓')
+  assert.equal(
+    hidden.size,
+    TOOL_PACKAGES.filter(item => item.name !== 'qzone').flatMap(item => item.tools).length
+    + UNINSTALLED_TOOLS.length,
+    '★ 由包表算 ✓（qzone 的 5 个放出来，其余包里 ＋ 卸载的照藏 ✓）',
+  )
 })
 
 check('★ 取多个包 ⇒ 各自的 5＋3 都放出来', () => {
   const hidden = hiddenTools(new Set(['qzone', 'requests']))
   assert.ok(!hidden.has('qq_qzone_post'))
   assert.ok(!hidden.has('qq_approve_friend'))
-  assert.equal(hidden.size, 24, '32 − 8 = 24 ✓')
+  assert.equal(
+    hidden.size,
+    TOOL_PACKAGES.filter(item => item.name !== 'qzone' && item.name !== 'group-admin')
+      .flatMap(item => item.tools).length + UNINSTALLED_TOOLS.length,
+    '★ 由包表算 ✓（qzone ＋ group-admin 放出来 ✓）',
+  )
 })
 
 check('★★ 卸载的**任何情况都不放出来**（取包也不行 ✓）', () => {
@@ -265,7 +277,8 @@ check('★★ 段表里列出的段名**都在 `tcb` 白名单里**（否则藏�
 
 check('★★ 白名单里**属于包内工具**的段，一个都不能漏（漏了＝她会读到调不动的提示 ✗）', () => {
   // ★ 这些段的工具**进了包** ⇒ 段必须跟着走 ✓。
-  const mustFollow = ['tool:subagent', 'tool:jobs', 'tool:session-query']
+  // ★★ 这些段的工具**进了包** ⇒ 段必须跟着走 ✓（★ `tool:pwsh` 于 2026-10-16 随 `pwsh` 入包 ✓）。
+  const mustFollow = ['tool:subagent', 'tool:jobs', 'tool:session-query', 'tool:pwsh']
   const covered = new Set(Object.values(PACKAGE_SECTIONS).flat())
   const leaked = mustFollow.filter(name => !covered.has(name))
   assert.deepEqual(leaked, [], `漏了：${leaked.join(', ')}`)
@@ -273,7 +286,8 @@ check('★★ 白名单里**属于包内工具**的段，一个都不能漏（�
 
 check('★ 留日常的工具对应的段**不在**段表里（它们永远可见 ✓）', () => {
   const all = Object.values(PACKAGE_SECTIONS).flat()
-  for (const name of ['tool:pwsh', 'tool:read', 'tool:web_search', 'tool:grep']) {
+  // ★ `tool:pwsh` **不在这里** ✗ —— 它的工具进了 `misc` 包 ⇒ 段也跟着走 ✓（见上一条 ✓）。
+  for (const name of ['tool:read', 'tool:web_search', 'tool:grep', 'tool:write', 'tool:edit', 'tool:glob']) {
     assert.ok(!all.includes(name), `${name} 不该被藏 ✓`)
   }
 })
@@ -284,11 +298,11 @@ check('★ 段表里的键都是真包名（拼错就永远藏不掉 ✓）', ()
   assert.deepEqual(unknown, [], `不是包名：${unknown.join(', ')}`)
 })
 
-check('★ 没取包 ⇒ 三个段都藏', () => {
+check('★ 没取包 ⇒ **四个段**都藏', () => {
   const hidden = hiddenSections(new Set())
   assert.deepEqual(
     [...hidden].sort(),
-    ['tool:jobs', 'tool:session-query', 'tool:subagent'],
+    ['tool:jobs', 'tool:pwsh', 'tool:session-query', 'tool:subagent'],
   )
 })
 
@@ -296,7 +310,7 @@ check('★ 取了 agents ⇒ `tool:subagent` 放出来，别的还藏', () => {
   const hidden = hiddenSections(new Set(['agents']))
   assert.ok(!hidden.has('tool:subagent'))
   assert.ok(hidden.has('tool:jobs'))
-  assert.equal(hidden.size, 2)
+  assert.equal(hidden.size, 3)
 })
 
 check('★★ 取全部包 ⇒ 段全部放出来（一个不藏）', () => {

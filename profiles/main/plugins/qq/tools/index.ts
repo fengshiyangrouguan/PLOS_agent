@@ -165,6 +165,8 @@ export function apply(ctx: Context, config: Config): void {
       reply_to: {
         type: 'string',
         description: 'Message id to quote, from a rendered message such as "(msg_id=123)". '
+          + 'Quoting a group message **also @s its author automatically** (that is how QQ replies work), '
+          + 'so do not add their QQ number to `at` as well. '
           + 'Only recent messages you actually received can be quoted — an old or unsent id is dropped silently.',
       },
     },
@@ -558,6 +560,11 @@ export function apply(ctx: Context, config: Config): void {
               properties: {
                 messageId: { type: 'string', required: true },
                 senderName: { type: 'string', required: true },
+                // ★★ 发送者的 **QQ 号** ✗ —— 2026-10-16 加上 ✓：
+                //   `qq_send_message` 的 `at` 要的是 QQ 号（不是昵称 ✗），
+                //   ★ 而她手上只有昵称 ⇒ 每次都得先去 `qq_list_group_members` 查一轮 ✓。
+                //   ★ 渲染里带上之后，她**直接抄**就能 @ ✓✓。
+                senderId: { type: 'string', required: true },
                 text: { type: 'string', required: true },
                 mentionsSelf: { type: 'boolean', required: true },
               },
@@ -573,7 +580,10 @@ export function apply(ctx: Context, config: Config): void {
         return [{
           type: 'text',
           text: messages
-            .map(item => `${item.senderName}${item.mentionsSelf ? ' (mentioned you)' : ''}: ${item.text}`)
+            // ★★ 带上 `(qq:…)` ✗ —— ★ 与 `(msg_id=…)` 明确不同 ✓：
+            //   `qq:` 是"这个人的 QQ 号"（★ 给 `at` 用 ✓），
+            //   `msg_id=` 是"这条消息的 id"（★ 给 `reply_to` 用 ✓✓）。
+            .map(item => `${item.senderName}(qq:${item.senderId})${item.mentionsSelf ? ' (mentioned you)' : ''}: ${item.text}`)
             .join('\n'),
         }]
       },
@@ -588,6 +598,7 @@ export function apply(ctx: Context, config: Config): void {
           messages.push({
             messageId: incoming.messageId,
             senderName: incoming.senderName,
+            senderId: incoming.userId,
             text: await ctx.qq.render(incoming),
             mentionsSelf: incoming.mentionsSelf,
           })

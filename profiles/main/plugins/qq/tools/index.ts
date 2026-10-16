@@ -855,7 +855,9 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_qzone_list',
     description:
       'List Qzone posts (说说). Omit target_uin for your own Qzone. '
-      + 'Each post carries a tid, which qq_qzone_comment and qq_qzone_like need.',
+      + 'Each post comes back with its tid and its comment count: the tid is the only handle for '
+      + 'a post (qq_qzone_comment and qq_qzone_like both need it), and the count is how you tell '
+      + 'which post someone commented on. Pass the post\'s time back as abstime when you like it.',
     parameters: {
       target_uin: { type: 'number', description: 'Whose Qzone. Optional (defaults to yours).' },
       pos: { type: 'number', description: 'Offset. Default 0.' },
@@ -876,19 +878,33 @@ export function apply(ctx: Context, config: Config): void {
               properties: {
                 tid: { type: 'string', required: true },
                 content: { type: 'string', required: true },
-                createdTime: { type: 'number', required: true },
+                createdAt: { type: 'number', required: true },
+                commentCount: { type: 'number', required: true },
+                private: { type: 'boolean', required: true },
               },
             },
           },
           reason: { type: 'string' },
         },
       },
-      render: (_args, value) => [{
-        type: 'text',
-        text: value.ok
-          ? `${String(value.posts?.length ?? 0)} posts (${String(value.total ?? '?')} total).`
-          : `Qzone list failed: ${value.reason ?? 'unknown reason'}`,
-      }],
+      // ★★ **必须把 `tid` 一条条列出来** ✗ —— 只报"多少条"等于**一个都用不了** ✓✓
+      //    实测（2026-10-16）：她为了回复评论**只能自己编 tid** ✗（编了 `"2"` ⇒ 协议端
+      //    `-10004 参数错误` ✓）。★ 而 `tid` 是**唯一的操作句柄** ✓。
+      render: (_args, value) => {
+        if (value.ok !== true) return [{ type: 'text', text: `Qzone list failed: ${value.reason ?? 'unknown reason'}` }]
+        const posts = value.posts ?? []
+        if (posts.length === 0) return [{ type: 'text', text: `No posts (${String(value.total ?? 0)} total).` }]
+        const lines = posts.map((post, index) => {
+          const text = post.content.replace(/\s+/g, ' ').slice(0, 60)
+          const comments = post.commentCount > 0 ? `评论 ${String(post.commentCount)}` : '无评论'
+          const visibility = post.private === true ? '仅自己' : '公开'
+          return `${String(index + 1)}. tid=${post.tid}  ${comments}  ${visibility}  ${text}`
+        })
+        return [{
+          type: 'text',
+          text: `共 ${String(value.total ?? posts.length)} 条，本页 ${String(posts.length)} 条：\n${lines.join('\n')}`,
+        }]
+      },
     },
     async execute(args) {
       try {
@@ -897,10 +913,15 @@ export function apply(ctx: Context, config: Config): void {
           ...args.pos === undefined ? {} : { pos: Number(args.pos) },
           ...args.num === undefined ? {} : { num: Number(args.num) },
         })
+        // ★★ 字段名照协议端的 schema 写 ✓（`time` ✓ / `comment_num` ✓ / `is_private` ✓）——
+        //    ⚠️ 这里曾经写成 `created_time` ✗ ⇒ `createdAt` **恒为 0** ✓（而它还要当
+        //    `qq_qzone_like` 的 `abstime` 用 ✗ ⇒ 那条链一起断 ✓）。
         const posts = (result.msglist ?? []).map(item => ({
           tid: String(item.tid ?? ''),
           content: String(item.content ?? ''),
-          createdTime: Number(item.created_time ?? 0),
+          createdAt: Number(item.time ?? 0),
+          commentCount: Number(item.comment_num ?? 0),
+          private: item.is_private === true,
         }))
         return { ok: true, total: Number(result.total ?? posts.length), posts }
       } catch (error) {
@@ -947,11 +968,17 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: 'qq_qzone_comment',
-    description: 'Comment on a Qzone post (说说). tid comes from qq_qzone_list.',
+    description:
+      'Comment on a Qzone post (说说). tid comes from qq_qzone_list. '
+      + 'To reply to someone\'s comment on your own post, just leave a comment whose content '
+      + 'starts with 「回复@对方名字：…」 — the protocol has no structured reply target, so that '
+      + 'plain text is the whole mechanism. '
+      + 'Only tid and content are used; there is no reply_to or post_id parameter, so do not invent one. '
+      + 'The tid must be the exact value from qq_qzone_list or qq_qzone_feeds — never a position number.',
     parameters: {
-      tid: { type: 'string', required: true, description: 'The post tid.' },
+      tid: { type: 'string', required: true, description: 'The post tid, exactly as returned by qq_qzone_list.' },
       content: { type: 'string', required: true, description: 'The comment text.' },
-      target_uin: { type: 'number', description: 'Owner of the post. Optional.' },
+      target_uin: { type: 'number', description: 'Owner of the post. Optional (defaults to yours).' },
     },
     output: {
       schema: {
@@ -985,10 +1012,13 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_qzone_like',
     description:
       'Like a Qzone post (说说), or pass unlike=true to take the like back. '
-      + 'tid comes from qq_qzone_list.',
+      + 'tid comes from qq_qzone_list. '
+      + 'Pass the post\'s createdAt as abstime — the protocol side says a real value is more '
+      + 'reliable than the default 0.',
     parameters: {
       tid: { type: 'string', required: true, description: 'The post tid.' },
       target_uin: { type: 'number', description: 'Owner of the post. Optional.' },
+      abstime: { type: 'number', description: 'The post\'s createdAt from qq_qzone_list. Optional.' },
       unlike: { type: 'boolean', description: 'true removes your like. Default false.' },
     },
     output: {
@@ -1014,6 +1044,10 @@ export function apply(ctx: Context, config: Config): void {
         await ctx.qq.call(action, {
           tid: String(args.tid),
           ...args.target_uin === undefined ? {} : { target_uin: Number(args.target_uin) },
+          // ★★ `abstime` 是**说说发表时间** ✓ —— schema 自己写着「传真实值更可靠」✓。
+          //    值来自 `qq_qzone_list` 的 `createdAt` ✓（★ 那条曾经断着 ✗ ——
+          //    因为 list 里字段名读错成了 `created_time` ⇒ 恒为 0 ✓）。
+          ...args.abstime === undefined ? {} : { abstime: Number(args.abstime) },
         })
         return { ok: true, liked: args.unlike !== true }
       } catch (error) {

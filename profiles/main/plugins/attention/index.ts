@@ -65,7 +65,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Config as ConfigSchema, type Config } from './config.ts'
 import { PendingQueue, type PendingItem } from './queue.ts'
 import {
-  URGENT_HINT, WRAPUP_HINT, planTransfer, withHint, type TransferPlan,
+  URGENT_HINT, WRAPUP_HINT, planTransfer, withHint, type AgentStatus, type TransferPlan,
 } from './preempt.ts'
 import type { PerceptionNotice } from '../perception/types.ts'
 
@@ -112,6 +112,63 @@ export function shouldSupplement(
   if (current.source !== source) return false
   return priority <= current.priority
 }
+
+/**
+ * ★★ **现在能不能补** —— 把两个前提合起来的纯函数。
+ *
+ * ## 为什么需要它（这是一个真 bug，2026-10-16 修）
+ *
+ * {@link shouldSupplement} 只比「**源相同 ＋ 优先级不高于基准**」✓ ——
+ * ★★ 但它**默认了"她正在跑"** ✗，而那个前提**没有被校验** ✓。
+ *
+ * ⚠️ 而 `currentSource` / `currentPriority` **在她空闲之后不会清** ✗
+ * （它们只在 `deliver` / `cancel` 时赋值 ✓，见 `currentSource` 的注释 ✓ ——
+ * ★ 代码里**没有任何重置** ✓）。★ 作者是知道的：`preempt.ts` 自己写着
+ * 「**`status === 'idle'` 时 `currentPriority` 无意义**」✓，
+ * ★★ 补偿约定就是「**每个读它的人先确认她真的在跑**」 ✓：
+ *
+ * ```
+ * · preempt  ✓ 守约（`if (status === 'idle') return { kind: 'deliver' }` ✓）
+ * · supplement ✗ 违约（没查 ✗）
+ * ```
+ *
+ * ## 不修会怎样（实测形状的坏结果）
+ *
+ * ```
+ * 10:00  冯氏发消息 ⇒ 她空闲 ⇒ deliver ⇒ 她醒了 ✓ currentSource = 'private:冯氏' ✓
+ * 10:00  她答完 ⇒ **agent/status → idle** ✓
+ *        ⇒ ★ 而 currentSource **仍是** 'private:冯氏' ✗
+ * 10:05  冯氏**又发一条** ⇒ 同源 ＋ 同优先级 ⇒ 判成"补充" ✗
+ *        ⇒ `agent.steer(原文)` ⇒ ★★ 但她**没有在跑的 turn** ✗ ⇒ steer **不开始新 turn** ✗
+ *        ⇒ ★★★ **她不回话** ✗（原文躺在 inbox 里 ✓）
+ * 10:06  冯氏再发 ⇒ ★ **还是判成补充** ✗ ⇒ **还是不理** ✗✗
+ * ⇒ ★★★★ **同一个人连发，她可能一直不醒** ✗✗ ——
+ *    而且**不会自愈**（每条都满足补充条件 ✓；`offIdle` 的 `attempt()` 救不了 ——
+ *    它处理的是 attention 自己的队列 ✗，而 steer 进的**是 agent 的 inbox** ✗）。
+ * ```
+ *
+ * ★ 这与那条**已修**的旧 bug（`offIdle` 补上"她空下来就投递队列" ✓）表现相同、
+ * **根因不同** ✗ —— 那条是队列投递时机 ✓，这条是补充判断缺前提 ✓。
+ *
+ * @param status - 目标 agent 当前忙闲（`'running'` 才可能补 ✓）。
+ * @param current - 她当前这一轮的基准（★ 可能已过期 ✓）。
+ * @param source - 这条消息所属会话。
+ * @param priority - 这条消息的优先级。
+ * @returns 该补返回 `true`；★ **不在跑一律 `false`** ✓ —— 调用方会走正常唤醒 ✓。
+ */
+export function canSupplementNow(
+  status: AgentStatus,
+  current: { readonly source: string | undefined, readonly priority: number } | undefined,
+  source: string,
+  priority: number,
+): boolean {
+  // ★★ 她不在跑 ⇒ 没有"正在跑的那一轮"可补 ✗。
+  //    哪怕基准还停在某个会话上（★ 它从不清 ✓），也不该 `steer` ——
+  //    因为 `steer` **不开始新 turn** ✗，内容会躺在 inbox 里等她下次被唤醒 ✓。
+  if (status !== 'running') return false
+  return shouldSupplement(current, source, priority)
+}
+
 
 export class Attention extends Service {
   static Config: z<Config> = ConfigSchema
@@ -333,14 +390,17 @@ export class Attention extends Service {
    * @returns 接下了返回 `true`（调用方**不要**再 `wake()`）；不接返回 `false`。
    */
   supplement(domain: string, source: string, text: string, priority: number): boolean {
-    const accept = shouldSupplement(
+    // ★★ **先拿 agent，再看她在不在跑** —— 顺序不能反 ✗：
+    //    `canSupplementNow` 要 `status` ✓，而 `status` 只有 agent 有 ✓。
+    const agent = this.targetAgent()
+    if (agent === undefined) return false
+    const accept = canSupplementNow(
+      agent.status,
       { source: this.currentSource, priority: this.currentPriority },
       source,
       priority,
     )
     if (!accept) return false
-    const agent = this.targetAgent()
-    if (agent === undefined) return false
 
     // ★ **不加 `WRAPUP_HINT`** —— 她是"接着说"，不是被打断，**不该收尾**。
     //   `WRAPUP_HINT` 的语义正是"答一句就回来"，那是对**中断**说的。

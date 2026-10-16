@@ -10,7 +10,7 @@
  * 所以判据本身必须钉住。
  */
 
-import { shouldSupplement } from '../index.ts'
+import { canSupplementNow, shouldSupplement } from '../index.ts'
 
 let passed = 0
 let failed = 0
@@ -56,6 +56,43 @@ const running = { source: 'private:2673439877', priority: 20 }
     shouldSupplement({ source: undefined, priority: 20 }, 'private:2673439877', 20), false)
   check('current 整个是 undefined ⇒ 不补',
     shouldSupplement(undefined, 'private:2673439877', 20), false)
+}
+
+// ── ★★ 加上"她真的在跑"这个前提（2026-10-16 修的真 bug）─────────────
+//
+// ★ 坏结果：`currentSource` 在她空闲之后**不会清** ✗（代码里没有任何重置 ✓）——
+// 于是"同一个人连发消息"时每条都满足"同源 ＋ 同级" ✓ ⇒ 全被判成补充 ✗
+// ⇒ `agent.steer` 进去，而 `steer` **不开始新 turn** ✗ ⇒ ★ **她一直不醒** ✗✗
+// （★ 而且**不会自愈**：每条新消息还是补充 ✓；`offIdle` 的 `attempt()` 处理的是
+//   attention 自己的队列 ✗，救不了 agent inbox 里那条 ✗。）
+{
+  check('★★ **她空闲 ⇒ 一律不补**（哪怕同源 ＋ 同级 ✓）—— 这一条就是修的那个 bug',
+    canSupplementNow('idle', running, 'private:2673439877', 20), false)
+
+  check('★★ 她在跑 ＋ 同源 ＋ 同级 ⇒ 补（原来该有的行为不受影响 ✓）',
+    canSupplementNow('running', running, 'private:2673439877', 20), true)
+
+  check('★ 她在跑 ＋ 不同源 ⇒ 不补',
+    canSupplementNow('running', running, 'group:728636404', 20), false)
+
+  check('★ 她在跑 ＋ 更高优先级 ⇒ 不补',
+    canSupplementNow('running', running, 'private:2673439877', 80), false)
+
+  check('★ 空闲 ＋ 不同源 ⇒ 当然也不补',
+    canSupplementNow('idle', running, 'group:728636404', 20), false)
+
+  check('★ 空闲 ＋ 没有基准（`undefined`）⇒ 不补',
+    canSupplementNow('idle', undefined, 'private:2673439877', 20), false)
+
+  check('★ 跑着 ＋ 没有基准 ⇒ 不补（`shouldSupplement` 那一层挡住 ✓）',
+    canSupplementNow('running', undefined, 'private:2673439877', 20), false)
+
+  check('★ 两个函数在"她跑着"时**逐例一致**（★ 新前提不改变旧判据 ✓）', [
+    canSupplementNow('running', running, 'private:2673439877', 20) === shouldSupplement(running, 'private:2673439877', 20),
+    canSupplementNow('running', running, 'group:728636404', 20) === shouldSupplement(running, 'group:728636404', 20),
+    canSupplementNow('running', running, 'private:2673439877', 80) === shouldSupplement(running, 'private:2673439877', 80),
+    canSupplementNow('running', undefined, 'private:2673439877', 20) === shouldSupplement(undefined, 'private:2673439877', 20),
+  ], [true, true, true, true])
 }
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

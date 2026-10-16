@@ -132,8 +132,8 @@ async function resolveReply(
   const messageId = String(data['id'] ?? '')
   const detail = await withTimeout(ctx.getMessage(messageId), ctx.options.expandTimeoutMs)
   if (detail === undefined) {
-    // 查不到：只留 id，`senderName`/`preview` 都空，渲染成 `回复消息(msg_id=…)`。
-    return { kind: 'reply', messageId, senderName: undefined, preview: undefined }
+    // 查不到：只留 id，`senderName`/`senderId`/`preview` 都空，渲染成 `回复消息(msg_id=…)`。
+    return { kind: 'reply', messageId, senderName: undefined, senderId: undefined, preview: undefined }
   }
   const parts: string[] = []
   for (const segment of detail.segments) {
@@ -142,7 +142,7 @@ async function resolveReply(
     if (typeof text === 'string' && text.trim() !== '') parts.push(text)
   }
   const preview = parts.length === 0 ? undefined : parts.join(' ')
-  return { kind: 'reply', messageId, senderName: detail.senderName, preview }
+  return { kind: 'reply', messageId, senderName: detail.senderName, senderId: detail.senderId, preview }
 }
 
 /**

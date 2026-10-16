@@ -160,6 +160,7 @@ export class ForwardExpander {
     const record = data as Record<string, unknown>
 
     const senderName = this.senderName(record)
+    const senderId = this.senderId(record)
     const rawSegments = record['content'] ?? record['message']
     const segments: ResolvedSegment[] = []
     let nested: ForwardBlock | undefined
@@ -177,7 +178,7 @@ export class ForwardExpander {
       }
     }
 
-    return { senderName, segments, nested }
+    return { senderName, senderId, segments, nested }
   }
 
   /**
@@ -201,6 +202,23 @@ export class ForwardExpander {
       nickname: pick(named['nickname']) ?? pick(record['nickname']),
       card: pick(named['card']),
     }, fallback)
+  }
+
+  /**
+   * 从子节点里取发送者的 **QQ 号** ✗ —— ★ 渲染 `(qq:…)` 要用 ✓（2026-10-16 加 ✓）。
+   *
+   * ★ 与 {@link senderName} 读的是**同一个字段** ✓（`sender.user_id`，回落顶层 `user_id` ✓）——
+   * ★★ 那边只用它当"显示名全空时的兜底" ✗，这里要的是号本身 ✓。
+   *
+   * @param record - 转发的子节点。
+   * @returns QQ 号；取不到返回 `undefined` ✓。
+   */
+  private senderId(record: Record<string, unknown>): string | undefined {
+    const sender = record['sender']
+    const named = sender !== null && typeof sender === 'object' ? sender as Record<string, unknown> : {}
+    const raw = named['user_id'] ?? record['user_id']
+    if (typeof raw === 'number') return String(raw)
+    return typeof raw === 'string' && raw !== '' ? raw : undefined
   }
 
   /** 解析转发内的一个段。`undefined` 表示该段不产生内容（例如被 skip 的图片）。 */

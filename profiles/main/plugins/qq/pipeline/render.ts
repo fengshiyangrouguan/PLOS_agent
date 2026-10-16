@@ -41,13 +41,20 @@ function renderImage(segment: ResolvedImage, wrapped: boolean): string | undefin
 
 /**
  * 渲染一条引用回复段的正文（不含外层方括号）。
+ *
+ * ★★ 昵称后面带上 **`(qq:…)`** ✗ —— ★ 她会照抄这个号去 `at` ✓（2026-10-16 ✓）。
+ * ★ 拿不到号时**只写昵称** ✗（不留空括号 ✓）。
+ *
  * @param segment - 已解析的引用段。
- * @returns 形如 `回复张三的消息:早上好(msg_id=123)` 的文本。
+ * @returns 形如 `回复张三(qq:10001)的消息:早上好(msg_id=123)` 的文本。
  */
 function replyText(segment: Extract<ResolvedSegment, { kind: 'reply' }>): string {
-  if (segment.senderName === undefined) return `回复消息(msg_id=${segment.messageId})`
-  if (segment.preview === undefined) return `回复${segment.senderName}的消息:[消息(msg_id=${segment.messageId})]`
-  return `回复${segment.senderName}的消息:${segment.preview}(msg_id=${segment.messageId})`
+  const who = segment.senderId === undefined || segment.senderId === ''
+    ? segment.senderName
+    : `${segment.senderName ?? '未知'}(qq:${segment.senderId})`
+  if (who === undefined) return `回复消息(msg_id=${segment.messageId})`
+  if (segment.preview === undefined) return `回复${who}的消息:[消息(msg_id=${segment.messageId})]`
+  return `回复${who}的消息:${segment.preview}(msg_id=${segment.messageId})`
 }
 
 /**
@@ -114,7 +121,11 @@ function renderForwardSubMessage(message: ForwardSubMessage, indent: number): st
   const body = parts.filter(part => part !== '').join(' ').trim()
   if (body === '') return undefined
   // 英文冒号 + 空格，沿用实验期格式。
-  return `${pad(indent)}${message.senderName}: ${body}`
+  // ★★ 昵称后面带上 `(qq:…)` ✗ —— ★ 转发里也会看到人，她可能要 @ 那个号 ✓（2026-10-16 ✓）。
+  const who = message.senderId === undefined || message.senderId === ''
+    ? message.senderName
+    : `${message.senderName}(qq:${message.senderId})`
+  return `${pad(indent)}${who}: ${body}`
 }
 
 /**

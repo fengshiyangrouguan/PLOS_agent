@@ -77,6 +77,8 @@ export interface ResolvedReply {
   messageId: string
   /** 被引消息发送者昵称；查不到时为 undefined。 */
   senderName: string | undefined
+  /** 被引消息发送者的 **QQ 号** ✗ —— ★ 渲染时跟在昵称后面 ✓（2026-10-16 加 ✓）。 */
+  senderId: string | undefined
   /** 被引消息的正文预览（只取 text 段）；无正文或查不到时为 undefined。 */
   preview: string | undefined
 }
@@ -115,6 +117,8 @@ export interface ResolvedUnknown {
 export interface ForwardSubMessage {
   /** 发送者显示名。 */
   senderName: string
+  /** 发送者的 **QQ 号** ✗ —— ★ 渲染时跟在昵称后面 ✓（2026-10-16 加 ✓）。 */
+  senderId: string | undefined
   /** 该子消息的段（已解析）。 */
   segments: ResolvedSegment[]
   /**
@@ -161,7 +165,12 @@ export interface ResolveContext {
    * 刻意返回原始段而不是 `ResolvedSegment[]`：解析是递归的，调用方（`segments.ts`）
    * 需要自己决定子消息解析到哪一层。返回 `undefined` 表示查不到（调用方降级）。
    */
-  getMessage: (messageId: string) => Promise<{ segments: import('../protocol/index.ts').Segment[], senderName: string | undefined } | undefined>
+  getMessage: (messageId: string) => Promise<{
+    segments: import('../protocol/index.ts').Segment[],
+    senderName: string | undefined,
+    /** ★ 发送者 QQ 号 ✗ —— ★ 渲染 `(qq:…)` 要用 ✓（2026-10-16 加 ✓）。 */
+    senderId: string | undefined,
+  } | undefined>
   /**
    * 取合并转发的内容（`get_forward_msg`）。
    *

@@ -134,12 +134,6 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_send_message',
     description: [
       'Send a text message to a QQ group or private chat.',
-      // ★★ 把 `at` 的两条坑写在她**一定会看到**的地方 ✗（2026-10-16 实测踩过 ✓）：
-      //   ① 她手里只有**昵称**，而 `at` 要 **QQ 号** ⇒ 得先去查 ✓；
-      //   ② ★ `at` 段**自己会渲染成 "@昵称"** ✗ ⇒ ★ 正文里**不要再写一遍** ✓（会重复 ✓）。
-      'To actually notify someone in a group, pass their **QQ number** in `at` — the mention',
-      'renders by itself, so do not also write "@name" in `text` (that duplicates it).',
-      'A nickname is not a QQ number: look the number up with qq_list_group_members first.',
       // ★ 长度控制（用户定案）—— 放在**工具描述**而不是 `text` 参数描述里：
       //   它是"怎么说话"的行为准则，不是字段格式。
       'In shallow, casual chat prefer short replies — usually 15–30 Chinese characters — sent as',
@@ -152,22 +146,19 @@ export function apply(ctx: Context, config: Config): void {
       text: {
         type: 'string',
         required: true,
-        description: 'Message body. Plain text; emoji markers like [表情：笑哭] are converted back to QQ faces. '
-          + 'Do not write the @name here when you also pass `at` — the mention renders on its own.',
+        description: 'Message body. Plain text; emoji markers like [表情：笑哭] are converted back to QQ faces.',
       },
       at: {
         type: 'array',
-        description: 'QQ **numbers** (not nicknames) to mention, e.g. ["352699068"]. These render as "@nickname" '
-          + 'by themselves, so leave the @name out of `text`. Ignored in private chats. '
-          + 'Use "all" to mention everyone. Look a number up with qq_list_group_members.',
+        description: 'QQ numbers to mention, e.g. ["352699068"]. Do **not** also write the @name in `text` — '
+          + 'the mention shows up on its own. Use "all" for everyone. Ignored in private chats.',
         items: { type: 'string' },
       },
       reply_to: {
         type: 'string',
         description: 'Message id to quote, from a rendered message such as "(msg_id=123)". '
-          + 'Quoting a group message **also @s its author automatically** (that is how QQ replies work), '
-          + 'so do not add their QQ number to `at` as well. '
-          + 'Only recent messages you actually received can be quoted — an old or unsent id is dropped silently.',
+          + 'Do **not** also write the @name in `text` — quoting already shows who you are replying to. '
+          + 'Only recent messages you actually received can be quoted.',
       },
     },
     output: {
@@ -340,6 +331,8 @@ export function apply(ctx: Context, config: Config): void {
         properties: {
           ok: { type: 'boolean', required: true },
           senderName: { type: 'string' },
+          // ★★ 发送者 QQ 号 ✗ —— ★ 渲染里带上，她就能**直接抄去 `at`** ✓（2026-10-16 ✓）。
+          senderId: { type: 'string' },
           text: { type: 'string' },
           reason: { type: 'string' },
         },
@@ -347,7 +340,7 @@ export function apply(ctx: Context, config: Config): void {
       render: (_args, value) => [{
         type: 'text',
         text: value.ok
-          ? `${value.senderName ?? 'unknown'}: ${value.text ?? ''}`
+          ? `${value.senderName ?? 'unknown'}(qq:${value.senderId ?? ''}): ${value.text ?? ''}`
           : `Read failed: ${value.reason ?? 'unknown reason'}`,
       }],
     },
@@ -371,6 +364,7 @@ export function apply(ctx: Context, config: Config): void {
         return {
           ok: true,
           senderName: displayNameOf(detail.sender, 'unknown'),
+          senderId: String(detail.sender?.user_id ?? ''),
           text,
         }
       } catch (error) {
@@ -652,6 +646,9 @@ export function apply(ctx: Context, config: Config): void {
                     additionalProperties: false,
                     properties: {
                       senderName: { type: 'string', required: true },
+                      // ★★ 发送者 QQ 号 ✗ —— ★ 搜索结果也带上 ✓：
+                      //   ★ 她**正是用这个工具找人的** ✓（2026-10-16 实测她在这一步卡住 ✓）。
+                      senderId: { type: 'string', required: true },
                       text: { type: 'string', required: true },
                       hit: { type: 'boolean', required: true },
                     },
@@ -670,7 +667,7 @@ export function apply(ctx: Context, config: Config): void {
         if (ranges.length === 0) return [{ type: 'text', text: 'Nothing matched.' }]
         const blocks = ranges.map(range => [
           `[${range.conversation}]`,
-          ...(range.messages ?? []).map(item => `${item.hit ? '>> ' : '   '}${item.senderName}: ${item.text}`),
+          ...(range.messages ?? []).map(item => `${item.hit ? '>> ' : '   '}${item.senderName}(qq:${item.senderId}): ${item.text}`),
         ].join('\n'))
         if (value.truncated === true) blocks.push('(more matches than fit — narrow the search)')
         return [{ type: 'text', text: blocks.join('\n\n') }]
@@ -693,6 +690,7 @@ export function apply(ctx: Context, config: Config): void {
             conversation: range.conversationId,
             messages: range.messages.map(row => ({
               senderName: row.senderName ?? row.senderId ?? 'unknown',
+              senderId: row.senderId ?? '',
               text: row.content,
               hit: range.hitIds.includes(row.messageId),
             })),

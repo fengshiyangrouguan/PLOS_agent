@@ -95,15 +95,20 @@ check('动画表情', [
 
 // ── 引用 ────────────────────────────────────────────────────────────
 check('引用有正文', [{
-  kind: 'reply', messageId: '123', senderName: '张三', preview: '早上好',
+  kind: 'reply', messageId: '123', senderName: '张三', senderId: undefined, preview: '早上好',
 }], '[回复张三的消息:早上好(msg_id=123)]:')
 
+// ★★ 带上 QQ 号 ✗ —— ★ 昵称后面跟 `(qq:…)`，她能直接抄去 `at` ✓（2026-10-16 ✓）。
+check('引用带上发送者 QQ 号', [{
+  kind: 'reply', messageId: '123', senderName: '张三', senderId: '10001', preview: '早上好',
+}], '[回复张三(qq:10001)的消息:早上好(msg_id=123)]:')
+
 check('引用无正文', [{
-  kind: 'reply', messageId: '123', senderName: '张三', preview: undefined,
+  kind: 'reply', messageId: '123', senderName: '张三', senderId: undefined, preview: undefined,
 }], '[回复张三的消息:[消息(msg_id=123)]]:')
 
 check('引用查不到（连发送者都没有）', [{
-  kind: 'reply', messageId: '123', senderName: undefined, preview: undefined,
+  kind: 'reply', messageId: '123', senderName: undefined, senderId: undefined, preview: undefined,
 }], '[回复消息(msg_id=123)]:')
 
 // ── 其余单段 ────────────────────────────────────────────────────────
@@ -120,9 +125,10 @@ const block: ForwardBlock = {
   title: '群聊的聊天记录',
   messageId: '999',
   messages: [
-    { senderName: '张三', segments: [{ kind: 'text', text: '早上好' }], nested: undefined },
+    { senderName: '张三', senderId: undefined, segments: [{ kind: 'text', text: '早上好' }], nested: undefined },
     {
       senderName: '李四',
+      senderId: undefined,
       segments: [
         { kind: 'text', text: '早' },
         { kind: 'image', sticker: false, description: '一只猫', failed: false },
@@ -166,7 +172,7 @@ check('转发有 XML 摘要时优先用摘要（原样，不缩进）', [
 const nested: ForwardBlock = {
   title: '聊天记录',
   messageId: '888',
-  messages: [{ senderName: '王五', segments: [{ kind: 'text', text: '在的' }], nested: undefined }],
+  messages: [{ senderName: '王五', senderId: undefined, segments: [{ kind: 'text', text: '在的' }], nested: undefined }],
   truncated: 0,
 }
 
@@ -178,6 +184,7 @@ check('嵌套块缩进 +1 层（与实验期不同，见 render.ts 注释）', [
       messageId: '999',
       messages: [{
         senderName: '张三',
+        senderId: undefined,
         segments: [{ kind: 'text', text: '看这个' }],
         nested,
       }],
@@ -217,8 +224,8 @@ check('转发内空正文不占行', [
       title: '聊天记录',
       messageId: '1',
       messages: [
-        { senderName: '张三', segments: [], nested: undefined },
-        { senderName: '李四', segments: [{ kind: 'text', text: '有内容' }], nested: undefined },
+        { senderName: '张三', senderId: undefined, segments: [], nested: undefined },
+        { senderName: '李四', senderId: undefined, segments: [{ kind: 'text', text: '有内容' }], nested: undefined },
       ],
       truncated: 0,
     },

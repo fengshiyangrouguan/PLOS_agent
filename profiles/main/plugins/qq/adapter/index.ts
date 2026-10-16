@@ -645,41 +645,15 @@ export class QqAdapter extends Service {
   }
 
   /**
-   * 查一条消息的**发送者 QQ 号** ✗ —— ★ 引用回复时用它补 `at` ✓（见 {@link sendText} ✓）。
-   *
-   * ★ 查不到就返回 `undefined` ✓ —— 那时 `sendText` **只发 `reply`** ✗，
-   * ★★ 而不是让整条消息因为补不出 `@` 就发不出去 ✓✓。
-   *
-   * @param messageId - 被引用的消息 id。
-   * @returns 发送者 QQ 号；查不到返回 `undefined` ✓。
-   */
-  private async replyAuthor(messageId: string): Promise<string | undefined> {
-    try {
-      const detail = await this.getMessage(messageId)
-      const userId = detail.sender?.user_id
-      return userId === undefined ? undefined : String(userId)
-    } catch {
-      // ★ 查不到 ⇒ 不补 @（★ 只发 reply ✓）。★ 与 `resolveReply` 的"查不到就留空"同一取舍 ✓。
-      return undefined
-    }
-  }
-
-  /**
    * 发纯文本（含可选 @ 与引用）。
    *
-   * ★★ **段序：`reply` → `at` → 正文** ✗✓ —— ★ 2026-10-16 起**复刻 QQ 的"引用即点名"** ✓。
+   * ★ **只压 `reply` 段** ✗ —— ★★ **不自动补 `at`** ✓✓（2026-10-16 实测 ✓）。
    *
-   * ## 一段走过的历史（★ 别再来回改 ✗）
-   *
-   * ★ 实验期（`Shiraha_OS` 的 `send_text` ✓）**刻意去掉了"引用即点名"** ✗ ——
-   * ★★ 理由是「它会在群聊里**凭空多出一个 `at` 段**，**调用方无从预期**」✓。
-   *
-   * ★★ 而现在**那个理由不成立了** ✗✓：★ 调用方就是我们自己的 `qq_send_message` ✓，
-   * ★ 它知道 `reply_to` 会带来一个 `@` ✓ ⇒ ★ **行为可控** ✓✓。
-   * ⇒ ★ 于是改回**复刻 QQ 的默认行为** ✓（★ 用户定 ✓）——
-   * ★★ 在 QQ 里"回复某条消息"**本来就会 @ 那条消息的发送者** ✓✓。
-   *
-   * ★ 要 @ 别人仍然显式传 `at` ✓；★ **与自动补的那个按 QQ 号去重** ✗（不会出现两个 @ ✓）。
+   * 为什么：★ 曾按"复刻 QQ 的引用即点名"补过一个 `at` ✓ ——
+   * ★★ 而实测**群里显示两个 `@`** ✗✗（★ 引用块自己就带一个 ✓ ——
+   * ★ 她的 `text` 里并没有 `@`，所以那两个都来自段 ✓✓）。
+   * ⇒ ★ **协议端显示引用时本来就会 @ 被回复者** ✗ ⇒ ★ **再补就是重复** ✓✓。
+   * ★ 所以回到最简：★ **要 @ 谁就显式传 `at`** ✓，引用只管引用 ✓。
    *
    * @param target - 群或私聊。
    * @param text - 正文。
@@ -692,29 +666,13 @@ export class QqAdapter extends Service {
     options: { at?: readonly string[], replyTo?: string } = {},
   ): Promise<string> {
     const segments: Segment[] = []
-    // ★★ **引用回复：复刻 QQ 的默认行为** ✗✓（2026-10-16 用户定 ✓）。
-    //
-    //   在 QQ 里"回复某条消息"会**同时 @ 那条消息的发送者** ✓ —— 段顺序是
-    //   **reply → at → 正文** ✓。★ 复刻它，因为她引用谁本来就是在跟谁说话 ✓。
-    //
-    //   ★ 只在**群**里补 `at` ✗（私聊没有 @ 语义 ✓，协议端直接拒 ✓）。
-    //   ★★ 而她**显式传了同一个 QQ 号**时不重复补 ✗ —— 否则对方会收到两个 @ ✓。
-    //   ⚠️ 查不到那条消息（太旧／不是自己收过的 ✓）⇒ ★ **只发 reply** ✗，不补 `at` ✓。
-    const explicitAt = new Set(options.at ?? [])
+    // ★ 只压 `reply` 段 ✗ —— ★★ **不自动补 `at`** ✓（★ 实测那样会显示两个 `@` ✓，见方法注释 ✓）。
     if (options.replyTo !== undefined) {
       segments.push({ type: 'reply', data: { id: options.replyTo } })
-      if (target.kind === 'group') {
-        const author = await this.replyAuthor(options.replyTo)
-        if (author !== undefined && author !== '' && !explicitAt.has(author)) {
-          explicitAt.add(author)
-          segments.push({ type: 'at', data: { qq: author } })
-          segments.push({ type: 'text', data: { text: ' ' } })
-        }
-      }
     }
     // 私聊没有 @ 语义，静默跳过（沿用实验期行为）。
     if (target.kind === 'group') {
-      for (const userId of explicitAt) {
+      for (const userId of options.at ?? []) {
         segments.push({ type: 'at', data: { qq: userId } })
         segments.push({ type: 'text', data: { text: ' ' } })
       }
@@ -956,6 +914,8 @@ export class QqAdapter extends Service {
           senderName: detail.sender === undefined
             ? undefined
             : displayNameOf(detail.sender, String(detail.sender.user_id ?? '')),
+          // ★★ 渲染 `(qq:…)` 要用它 ✗ —— ★ 让她能直接抄去 `at` ✓（2026-10-16 加 ✓）。
+          senderId: detail.sender?.user_id === undefined ? undefined : String(detail.sender.user_id),
         }
       },
       getForward: (token) => this.getForwardMsg(token),

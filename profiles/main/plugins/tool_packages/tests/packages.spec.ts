@@ -23,8 +23,10 @@
 import assert from 'node:assert/strict'
 import {
   FIND_TOOLS_NAME,
+  PACKAGE_SECTIONS,
   TOOL_PACKAGES,
   UNINSTALLED_TOOLS,
+  hiddenSections,
   hiddenTools,
   packageOf,
   packagesSectionText,
@@ -218,6 +220,76 @@ check('★ 说明里**不含**动态内容（"取过哪些包"由查找工具的
   const text = packagesSectionText()
   assert.ok(!text.includes('已取'), '不该写"已取用"之类的动态状态 ✓')
   assert.ok(!text.includes('当前'), '不该写"当前" ✓')
+})
+
+// ── ★★ 提示段（`tool:*`）跟着包走 ───────────────────────────────
+//
+// ★ 背景：`tcb` 的 `sections` 白名单里列着各工具的"什么时候用它"提示 ✓
+// （`data/tcb.json` ✓）。工具被收进包之后**平时调不了** ✗ ⇒ 那段提示**必须一起藏** ✓
+// —— 否则她会读到「什么时候用 subagent」却根本调不动 ✗✓。
+
+/** ★★ `data/tcb.json` 里 `main` 的 `sections`（2026-10-16 实测抄录 ✓）。 */
+const TCB_SECTIONS: readonly string[] = [
+  'deployment:persona-prefix',
+  'deployment:persona-suffix',
+  'tool-packages',
+  'tool:pwsh',
+  'tool:read',
+  'tool:write',
+  'tool:edit',
+  'tool:glob',
+  'tool:grep',
+  'tool:web_search',
+  'tool:web_fetch',
+  'tool:subagent',
+  'tool:jobs',
+  'tool:session-query',
+]
+
+check('★★ 段表里列出的段名**都在 `tcb` 白名单里**（否则藏了个不存在的段 ✓）', () => {
+  const all = Object.values(PACKAGE_SECTIONS).flat()
+  const missing = all.filter(name => !TCB_SECTIONS.includes(name))
+  assert.deepEqual(missing, [], `不在白名单里：${missing.join(', ')}`)
+})
+
+check('★★ 白名单里**属于包内工具**的段，一个都不能漏（漏了＝她会读到调不动的提示 ✗）', () => {
+  // ★ 这些段的工具**进了包** ⇒ 段必须跟着走 ✓。
+  const mustFollow = ['tool:subagent', 'tool:jobs', 'tool:session-query']
+  const covered = new Set(Object.values(PACKAGE_SECTIONS).flat())
+  const leaked = mustFollow.filter(name => !covered.has(name))
+  assert.deepEqual(leaked, [], `漏了：${leaked.join(', ')}`)
+})
+
+check('★ 留日常的工具对应的段**不在**段表里（它们永远可见 ✓）', () => {
+  const all = Object.values(PACKAGE_SECTIONS).flat()
+  for (const name of ['tool:pwsh', 'tool:read', 'tool:web_search', 'tool:grep']) {
+    assert.ok(!all.includes(name), `${name} 不该被藏 ✓`)
+  }
+})
+
+check('★ 段表里的键都是真包名（拼错就永远藏不掉 ✓）', () => {
+  const names = TOOL_PACKAGES.map(item => item.name)
+  const unknown = Object.keys(PACKAGE_SECTIONS).filter(key => !names.includes(key))
+  assert.deepEqual(unknown, [], `不是包名：${unknown.join(', ')}`)
+})
+
+check('★ 没取包 ⇒ 三个段都藏', () => {
+  const hidden = hiddenSections(new Set())
+  assert.deepEqual(
+    [...hidden].sort(),
+    ['tool:jobs', 'tool:session-query', 'tool:subagent'],
+  )
+})
+
+check('★ 取了 agents ⇒ `tool:subagent` 放出来，别的还藏', () => {
+  const hidden = hiddenSections(new Set(['agents']))
+  assert.ok(!hidden.has('tool:subagent'))
+  assert.ok(hidden.has('tool:jobs'))
+  assert.equal(hidden.size, 2)
+})
+
+check('★★ 取全部包 ⇒ 段全部放出来（一个不藏）', () => {
+  assert.equal(hiddenSections(new Set(TOOL_PACKAGES.map(item => item.name))).size, 0)
 })
 
 console.log(`\n通过 ${passed}，失败 ${failed}`)

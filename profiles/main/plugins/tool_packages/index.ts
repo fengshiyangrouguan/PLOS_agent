@@ -43,6 +43,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   FIND_TOOLS_NAME,
   TOOL_PACKAGES,
+  hiddenSections,
   hiddenTools,
   packageOf,
   packagesSectionText,
@@ -93,16 +94,27 @@ export function apply(ctx: Context): void {
     return next()
   })
 
-  // ── ② ★★ 过滤工具表：包里的（未取用的）＋ 卸载的 ⇒ 不进 `tools` ──────
+  // ── ② ★★ 过滤工具表与提示段：包里的（未取用的）＋ 卸载的 ⇒ 都不进 ────
   //
   // ★ 返回值是 `PromptAssembly`（`sections` / `contexts` / **`tools`** / `variables` ✓）
-  //   ⇒ 和 `sections` 一样筛 ✓。
+  //   ⇒ `sections` 与 `tools` **一起筛** ✓。
+  //
+  // ★★ **为什么两样都要筛**：`tcb` 的 `sections` 白名单里列着各工具的
+  //   "什么时候用它"提示段（`tool:subagent` / `tool:session-query` / `tool:jobs` ✓）——
+  //   若只筛 `tools` ✗，她会**读到"什么时候用 subagent"却调不动它** ✗✓。
+  //   ⇒ ★ 两者跟着包**一起进出** ✓。
+  //
   // ★★ **包里的工具靠名字筛** ⇒ 名字必须是**真实的注册名** ✓
   //   （拼错＝静默少一个 ✗ ⇒ 由 `tests/packages.spec.ts` 对着真实工具表核对 ✓）。
   ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
     const result = await next()
-    const hidden = hiddenTools(active)
-    return { ...result, tools: result.tools.filter(tool => !hidden.has(tool.name)) }
+    const hiddenToolsNow = hiddenTools(active)
+    const hiddenSectionsNow = hiddenSections(active)
+    return {
+      ...result,
+      sections: result.sections.filter(section => !hiddenSectionsNow.has(section.name)),
+      tools: result.tools.filter(tool => !hiddenToolsNow.has(tool.name)),
+    }
   })
 
   // ── ③ ★ 那段说明（文本固定 ⇒ 进缓存 ✓）────────────────────────────

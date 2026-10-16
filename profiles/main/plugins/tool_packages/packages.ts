@@ -129,6 +129,33 @@ export function packageOf(name: string): ToolPackage | undefined {
 }
 
 /**
+ * ★★ **包里那些工具对应的"什么时候用它"提示段名**（`tool:<…>` ✓）。
+ *
+ * ## 为什么需要它
+ *
+ * 那些段由**各个工具插件**注册 ✓，再经 `tcb` 的 `sections` 白名单放行 ✓
+ * （`data/tcb.json` 里列着 `tool:pwsh` / `tool:subagent` / `tool:session-query` … ✓）。
+ *
+ * ★★ **问题**：工具被收进包之后**平时不在 `tools` 里** ✗ —— 而那段提示**还在** ✓
+ * ⇒ 她会读到「什么时候用 subagent」却**根本调不动** ✗✓。
+ * ⇒ ★ 所以要**跟着包一起出现／一起收起来** ✓。
+ *
+ * ## 为什么写成一张表、而不是从工具名推
+ *
+ * ★ 段名与工具名**不是**机械对应 ✗ —— 例如
+ * `session_search` / `session_event_search` / … 这一族对应的是**一个**段
+ * `tool:session-query` ✓。★ 推导会错 ✗，所以**显式列** ✓。
+ *
+ * ★ 只列**真的在白名单里**的那些 ✓（`tool:pwsh` / `tool:read` / … 属于留日常的工具 ✓，
+ * 不在这里 ⇒ 永远不被藏 ✓）。
+ */
+export const PACKAGE_SECTIONS: Readonly<Record<string, readonly string[]>> = {
+  agents: ['tool:subagent'],
+  jobs: ['tool:jobs'],
+  memory: ['tool:session-query'],
+}
+
+/**
  * ★★ **当前该藏起来**的工具名 —— 本次装配**不进 `tools`** 的那些 ✓。
  *
  * 判据：
@@ -148,6 +175,25 @@ export function hiddenTools(active: ReadonlySet<string>): ReadonlySet<string> {
   }
   return hidden
 }
+
+/**
+ * ★★ **当前该藏起来**的提示段名（`tool:<…>` ✓）—— 与 {@link hiddenTools} 配套 ✓。
+ *
+ * 判据同前 ✓：段的包**没被取用** ⇒ 藏 ✓。
+ * ★ 目的：★ **别让她读到"什么时候用某个工具"，而那个工具又调不动** ✗✓。
+ *
+ * @param active - 已取用的包名。
+ * @returns 该从 `sections` 里筛掉的段名集合 ✓。
+ */
+export function hiddenSections(active: ReadonlySet<string>): ReadonlySet<string> {
+  const hidden = new Set<string>()
+  for (const [pack, sections] of Object.entries(PACKAGE_SECTIONS)) {
+    if (active.has(pack)) continue
+    for (const section of sections) hidden.add(section)
+  }
+  return hidden
+}
+
 
 /**
  * ★★ **进系统提示词的那段说明** —— 「包里有什么、什么时候用、可以按需取用」✓。

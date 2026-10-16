@@ -83,11 +83,14 @@ function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** `target` 参数的公共定义——三个工具共用，措辞保持一致。 */
+/** `target` 参数的公共定义——所有"群或私聊都可能"的工具共用，措辞保持一致。 */
 const TARGET_PARAM = {
   type: 'string',
   required: true,
-  description: 'Conversation to act on, as "group:<group id>" or "private:<user id>". Example: "group:871074118".',
+  // ★ 描述**自解释**：两个分支都点明 ✓ —— ★ **不给例子** ✗
+  //   （例子是拐杖 ✗：它出现往往说明描述没写清 ✓；而"一眼看明白"才是目标 ✓）。
+  description: 'Which conversation to act on: "group:<group id>" for a group, '
+    + '"private:<user id>" for a private chat.',
 } as const
 
 /**
@@ -131,14 +134,12 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_send_message',
     description: [
       'Send a text message to a QQ group or private chat.',
-      'Use "group:<id>" or "private:<id>" as the target.',
-      'In groups you may mention people with `at` and quote a message with `reply_to`.',
       // ★ 长度控制（用户定案）—— 放在**工具描述**而不是 `text` 参数描述里：
       //   它是"怎么说话"的行为准则，不是字段格式。
-      'In shallow, casual chat prefer a short reply — usually 15–30 Chinese characters —'
-      + ' and send several short messages rather than one long block.',
-      'That length does not apply when you are expressing complex feelings, holding a deeper'
-      + ' discussion, or when something simply needs to be said in full.',
+      'In shallow, casual chat prefer short replies — usually 15–30 Chinese characters — sent as',
+      'several short messages rather than one long block.',
+      'That does not apply when you are expressing complex feelings, holding a deeper discussion,',
+      'or when something simply needs to be said in full.',
     ].join(' '),
     parameters: {
       target: TARGET_PARAM,
@@ -207,10 +208,10 @@ export function apply(ctx: Context, config: Config): void {
       'Wait for the next message in one conversation, then return it.',
       'Use it when the other side may still be typing: instead of answering half a thought or',
       'ending your turn, hold the floor and wait a little.',
-      'While you wait, messages from that conversation come straight back here and count as read;',
-      'they do NOT wake you separately. Other conversations are unaffected.',
-      `Wait at most ${String(config.waitMaxSeconds)} seconds.`,
-      'On timeout it simply reports that nobody spoke — that is not an error.',
+      'While you wait, that conversation\'s messages come straight back here, count as read, and do',
+      'NOT wake you separately. Other conversations are unaffected.',
+      `Wait at most ${String(config.waitMaxSeconds)} seconds; on timeout it reports that nobody`
+      + ' spoke, which is not an error.',
     ].join(' '),
     parameters: {
       target: TARGET_PARAM,
@@ -267,8 +268,6 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_send_image',
     description: [
       'Send an image to a QQ group or private chat.',
-      '`file` may be an http(s) URL, an absolute local path, or a "base64://..." payload —',
-      'the protocol side decides how to fetch it.',
     ].join(' '),
     parameters: {
       target: TARGET_PARAM,
@@ -313,8 +312,7 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_read_message',
     description: [
       'Read one stored QQ message by id and render it as text.',
-      'Use this to look at a quoted message whose preview looked truncated, or to pull a',
-      'message you only have the id of.',
+      'Use it to expand a quoted preview, or to look up a message you only have the id of.',
     ].join(' '),
     parameters: {
       message_id: {
@@ -476,9 +474,8 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'qq_chats',
     description: [
-      'Open QQ and look at the chat list: which conversations have something new, and how many.',
-      'This is opening the app and glancing at it — no message text, and nothing becomes read.',
-      'Use qq_read to open one and actually read it.',
+      'Look at the QQ chat list: which conversations have something new, and how many.',
+      'Glancing at the list shows no message text and marks nothing as read — use qq_read for that.',
     ].join(' '),
     parameters: {},
     output: {
@@ -523,8 +520,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'qq_read',
     description: [
-      'Open one QQ conversation and read its messages.',
-      'This is the step that marks it as read; the chat list does not.',
+      'Open one QQ conversation and read its messages. This is the step that marks it as read.',
       'Rendering images and forwards costs work, so raise limit deliberately.',
     ].join(' '),
     parameters: {
@@ -596,10 +592,8 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'qq_search',
     description: [
-      'Search the full QQ message archive by text.',
-      'Use it when you do not know what a conversation is about: everything ever received is archived,',
-      'while what you were shown only covered the recent messages.',
-      'Each hit comes back with the messages around it, so you see it in context rather than alone.',
+      'Search the full QQ message archive by text — everything ever received, not just what you were shown.',
+      'Use it when you do not remember where something was said; hits come with their surrounding messages.',
     ].join(' '),
     parameters: {
       query: {
@@ -780,10 +774,13 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'qq_approve_friend',
     description:
-      'Approve or reject a QQ friend request. The flag comes from the friend-request '
-      + 'notification you received (it looks like "u_...").',
+      'Approve or reject a QQ friend request.',
     parameters: {
-      flag: { type: 'string', required: true, description: 'The request flag.' },
+      flag: {
+        type: 'string',
+        required: true,
+        description: 'The request flag, from the friend request you received.',
+      },
       approve: { type: 'boolean', description: 'true to accept, false to reject.' },
     },
     output: {
@@ -819,13 +816,18 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'qq_approve_group',
     description:
-      'Approve or reject a QQ group join request, or accept a group invitation. '
-      + 'The flag comes from the request notification you received (it looks like "slreq:..."). '
-      + 'sub_type is "add" when someone asks to join, "invite" when you were invited.',
+      'Approve or reject a QQ group join request, or accept a group invitation.',
     parameters: {
-      flag: { type: 'string', required: true, description: 'The request flag.' },
+      flag: {
+        type: 'string',
+        required: true,
+        description: 'The request flag, from the request you received.',
+      },
       approve: { type: 'boolean', description: 'true to accept, false to reject.' },
-      sub_type: { type: 'string', description: '"add" or "invite". Optional.' },
+      sub_type: {
+        type: 'string',
+        description: '"add" when someone asks to join, "invite" when you were invited. Optional.',
+      },
       reason: { type: 'string', description: 'Reason shown on rejection. Optional.' },
     },
     output: {
@@ -874,10 +876,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'qq_qzone_list',
     description:
-      'List Qzone posts (说说). Omit target_uin for your own Qzone. '
-      + 'Each post comes back with its tid and its comment count: the tid is the only handle for '
-      + 'a post (qq_qzone_comment and qq_qzone_like both need it), and the count is how you tell '
-      + 'which post someone commented on. Pass the post\'s time back as abstime when you like it.',
+      'List the posts on a Qzone (说说), with each post\'s tid, comment count and visibility.',
     parameters: {
       target_uin: { type: 'number', description: 'Whose Qzone. Optional (defaults to yours).' },
       pos: { type: 'number', description: 'Offset. Default 0.' },
@@ -989,14 +988,14 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'qq_qzone_comment',
     description:
-      'Comment on a Qzone post (说说). tid comes from qq_qzone_list. '
-      + 'To reply to someone\'s comment on your own post, just leave a comment whose content '
-      + 'starts with 「回复@对方名字：…」 — the protocol has no structured reply target, so that '
-      + 'plain text is the whole mechanism. '
-      + 'Only tid and content are used; there is no reply_to or post_id parameter, so do not invent one. '
-      + 'The tid must be the exact value from qq_qzone_list or qq_qzone_feeds — never a position number.',
+      'Comment on a Qzone post (说说). To reply to someone\'s comment on it, say so in the text '
+      + '(there is no separate reply target).',
     parameters: {
-      tid: { type: 'string', required: true, description: 'The post tid, exactly as returned by qq_qzone_list.' },
+      tid: {
+        type: 'string',
+        required: true,
+        description: 'The post\'s tid, copied from qq_qzone_list.',
+      },
       content: { type: 'string', required: true, description: 'The comment text.' },
       target_uin: { type: 'number', description: 'Owner of the post. Optional (defaults to yours).' },
     },
@@ -1031,14 +1030,18 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(defineTool({
     name: 'qq_qzone_like',
     description:
-      'Like a Qzone post (说说), or pass unlike=true to take the like back. '
-      + 'tid comes from qq_qzone_list. '
-      + 'Pass the post\'s createdAt as abstime — the protocol side says a real value is more '
-      + 'reliable than the default 0.',
+      'Like a Qzone post (说说), or pass unlike=true to remove your like.',
     parameters: {
-      tid: { type: 'string', required: true, description: 'The post tid.' },
+      tid: {
+        type: 'string',
+        required: true,
+        description: 'The post\'s tid, copied from qq_qzone_list.',
+      },
       target_uin: { type: 'number', description: 'Owner of the post. Optional.' },
-      abstime: { type: 'number', description: 'The post\'s createdAt from qq_qzone_list. Optional.' },
+      abstime: {
+        type: 'number',
+        description: 'The post\'s createdAt, copied from qq_qzone_list. Optional.',
+      },
       unlike: { type: 'boolean', description: 'true removes your like. Default false.' },
     },
     output: {

@@ -712,7 +712,11 @@ export function apply(ctx: Context, config: Config): void {
       'Mute someone in a QQ group, or lift a mute. duration is in seconds; '
       + 'pass 0 to lift a mute. Pass user_id "all" to mute the whole group.',
     parameters: {
-      target: { type: 'string', required: true, description: 'Group, as "group:<id>".' },
+      // ★★ 用 `TARGET_PARAM` ✓（★ 它带**具体例子** ✓：「Example: "group:871074118"」✓）。
+      //    实测（2026-10-16）：只写抽象的 `'Group, as "group:<id>".'` ✗ ⇒ 她填了
+      //    `{"group_id":"728636404", …}` ✗ ⇒ DSH 报 `missing required property "target"` ✓。
+      //    ★ 而 `qq_send_message` 一直正常 ✓ —— 差别就在**有没有例子** ✓✓。
+      target: TARGET_PARAM,
       user_id: {
         type: 'string',
         description: 'QQ number of the member to mute, or "all" for the whole group.',
@@ -1160,7 +1164,8 @@ export function apply(ctx: Context, config: Config): void {
     name: 'qq_group_muted',
     description: 'List the members of a QQ group who are still muted.',
     parameters: {
-      target: { type: 'string', required: true, description: 'Group, as "group:<id>".' },
+      // ★ 同 `qq_set_group_ban`：用 `TARGET_PARAM` ✓ —— 它带例子，措辞与老工具一致 ✓。
+      target: TARGET_PARAM,
     },
     output: {
       schema: {

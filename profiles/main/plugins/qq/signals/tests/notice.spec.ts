@@ -29,6 +29,7 @@ import {
   PRIORITY_PASSIVE,
   mapNotice,
   mapRequest,
+  requestPendingKey,
 } from '../notice.ts'
 
 let passed = 0
@@ -297,6 +298,28 @@ check('★ 不同时间 ⇒ **不同指纹**（两件不同的事 ✓）', () =>
 check('★ 待办型的指纹就是 `flag`（★ 重启后也认得出来 ✓）', () => {
   const mapped = mapRequest({ request_type: 'friend', user_id: 1, flag: 'u_abc' }, CTX)
   assert.equal(mapped?.fingerprint, 'req:u_abc')
+})
+
+// ── ★★ 待办型的**清空键**两面必须一致（2026-10-17 真机故障 ✗）─────────
+//
+// ★ 症状：★ 加好友时**好友通知反复跳、无法被消费** ✓。
+// ★★ 根因：★ 生成指纹的是 `mapRequest` ✓，而**删它的是 `signals/index.ts` 的监听器** ✗ ——
+//   两边各拼一次 `req:<flag>` ⇒ ★ 歪了就删不掉 ⇒ 每次 `tick()` 重报 ✓。
+// ⇒ ★ 所以收成 `requestPendingKey()` ✓，下面三条把它钉死 ✓。
+check('★★ 清空键与 `mapRequest` 的指纹**同一个值**（歪了就删不掉 ✗）', () => {
+  const mapped = mapRequest({ request_type: 'friend', user_id: 1, flag: 'u_abc' }, CTX)
+  assert.equal(requestPendingKey('u_abc'), mapped?.fingerprint)
+})
+
+check('★★ 群申请也一致（★ 三类待办共用同一个键函数 ✓）', () => {
+  const add = mapRequest({ request_type: 'group', sub_type: 'add', group_id: 9, user_id: 1, flag: 'g_x' }, CTX)
+  const invite = mapRequest({ request_type: 'group', sub_type: 'invite', group_id: 9, user_id: 1, flag: 'g_y' }, CTX)
+  assert.equal(requestPendingKey('g_x'), add?.fingerprint)
+  assert.equal(requestPendingKey('g_y'), invite?.fingerprint)
+})
+
+check('★ 键的形如 `req:<flag>`（★ 前缀写死在一处 ✓）', () => {
+  assert.equal(requestPendingKey('u_abc'), 'req:u_abc')
 })
 
 // ── 边界 ──────────────────────────────────────────────────────────

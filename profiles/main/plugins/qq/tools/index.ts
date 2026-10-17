@@ -831,6 +831,9 @@ export function apply(ctx: Context, config: Config): void {
           flag: String(args.flag),
           approve: args.approve !== false,
         })
+        // ★★ 告诉 `signals`：这一条处理完了 ✗ —— ★ 否则它会**每次 tick 都重报** ✓
+        //   （★ 用户实测"好友通知反复跳、无法被消费"✓ ／ 见 `qq/request-consumed` 的注释 ✓）。
+        ctx.emit('qq/request-consumed', String(args.flag))
         return { ok: true, approved: args.approve !== false }
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }
@@ -880,6 +883,8 @@ export function apply(ctx: Context, config: Config): void {
           ...args.sub_type === undefined ? {} : { sub_type: String(args.sub_type) },
           ...args.reason === undefined ? {} : { reason: String(args.reason) },
         })
+        // ★★ 同 `qq_approve_friend`：★ 处理完就告诉 `signals` 删掉待办 ✓。
+        ctx.emit('qq/request-consumed', String(args.flag))
         return { ok: true, approved: args.approve !== false }
       } catch (error) {
         return { ok: false, reason: reasonOf(error) }

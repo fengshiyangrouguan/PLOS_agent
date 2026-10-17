@@ -160,6 +160,25 @@ declare module '@deepseek-ai/cordis' {
      * @param raw - 原始请求帧。
      */
     'qq/request'(raw: Record<string, unknown>): void
+    /**
+     * ★★ **一条申请已经被处理掉了**（批准／拒绝）✗ —— 观察类事件。
+     *
+     * ## 为什么需要它（2026-10-17 真机故障 ✓）
+     *
+     * ★ `qq/signals` 的 `pending` 里，**待办型**（加好友／加群申请／群邀请 ✓）
+     * **不会**由 `pull()` 移出 ✗ —— ★ 那是刻意的（**没处理就一直留着，宁可重复报也不丢** ✓）。
+     * ★★ 而"处理完了"这件事**只有发出去的那个工具知道** ✗ ⇒
+     * ★★★ 不告诉 `signals` ⇒ 那条待办**永远留着** ⇒ **每次 `tick()` 都重报一遍** ✗✓
+     * ⇒ ★★★★ **用户实测**：★ 加好友时**好友通知反复跳、无法被消费** ✓✓。
+     *
+     * ★ 所以批准／拒绝成功后 emit 这个事件 ✓，`signals` 收到就删掉 `req:<flag>` ✓。
+     *
+     * ★★ **用事件而不是直接调用** ✗：★ `tools` 与 `signals` 是**两个插件** ✓ ——
+     * 前者不该 import 后者的模块级状态（`AGENTS.md` §二：分层）✓✓。
+     *
+     * @param flag - 那条请求的 `flag`（与 `mapRequest` 的指纹 `req:<flag>` 同一个 ✓）。
+     */
+    'qq/request-consumed'(flag: string): void
   }
 }
 

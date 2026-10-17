@@ -60,7 +60,7 @@ import z from '@deepseek-ai/schemastery'
 import type { QqIncoming } from '../adapter/index.ts'
 import { conversationOf, parseConversation } from '../adapter/buffer.ts'
 // ★ 通知／申请的映射 —— **纯逻辑在 `notice.ts`** ✓（白名单、级别、两类、指纹 ✓，28 项自检 ✓）。
-import { mapNotice, mapRequest, type MappedSignal } from './notice.ts'
+import { mapNotice, mapRequest, requestPendingKey, type MappedSignal } from './notice.ts'
 // ★ 「描述拿不到」那个占位文本 —— **从渲染它的地方导出**，别在这里再写一遍字面量
 //   （两个文件靠同一个字面量耦合是脆的：改一处忘另一处就静默失效）。
 import { IMAGE_MISSING } from '../pipeline/segments.ts'
@@ -214,9 +214,13 @@ function nameOf(last: QqIncoming | undefined, fallback: string): string {
  *  · **待办型**（加好友／加群申请／群邀请）—— ★★ **永不由 `pull()` 移出** ✓
  *    （**没处理就一直留着** ✓ —— 宁可重复报，也**绝不能丢** ✓✓）
  *
- * ⚠️ 待办型的**精确**清空点（她真的批准／拒绝之后 ✓）是**下一件事** ✓ ——
- * 规格已经写好了（§6.2：挂 `qq_approve_*` 成功 ✓）。在那之前，
- * 待办型会**每次 tick 都重报一遍** ✗（噪音 ✓，但**不丢** ✓ —— 方向是安全的 ✓）。
+ * ★★ 待办型的**精确**清空点：★ **`qq_approve_friend` / `qq_approve_group` 成功之后** ✗✓
+ *    （2026-10-17 接上 ✓）。★ 那两个工具 emit `qq/request-consumed` ✓，
+ *    见下面 `ctx.on(...)` 那一段 ✓。
+ *
+ * ⚠️ **在那之前它确实会每次 `tick()` 重报一遍** ✗ —— 用户实测过
+ *    「**哥们加好友时好友通知反复跳、无法被消费**」✓✓（★ 那就是缺这一根线 ✓）。
+ *    ★ 所以**别退回"永不移出"** ✗：★ 重复报只是噪音 ✓，而**永不消失是故障** ✗✓。
  */
 const pending = new Map<string, MappedSignal>()
 
@@ -508,6 +512,23 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.on('qq/notice', (raw) => { remember(mapNotice(raw, mapContext())) })
   ctx.on('qq/request', (raw) => { remember(mapRequest(raw, mapContext())) })
+
+  // ★★ **申请被处理掉了 ⇒ 删掉那条待办** ✗✓（★ 2026-10-17 接上 ✓）。
+  //
+  //   ★ 键用 **`requestPendingKey(flag)`** ✗ —— ★ 与 `mapRequest` 生成时**同一个函数** ✓
+  //   （★ 各拼一遍会歪 ⇒ 歪了就是"删不掉"⇒ 正是这次那个故障 ✓）。
+  //   ★★ 必须包 try/catch ✗：★ cordis 的 `emit` 是 `Array.map` ✓，
+  //   **一个监听器抛错会饿死后面的** ✗（`AGENTS.md` §三 ✓）。
+  ctx.on('qq/request-consumed', (flag) => {
+    try {
+      pending.delete(requestPendingKey(String(flag)))
+    } catch (error) {
+      ctx.logger.warn(
+        'qq-signals: 清待办失败（不影响消息流转）：%o',
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+  })
 
   // ── 信号源：注册即 effect，随插件卸载 ────────────────────────────
   ctx.effect(() => ctx.perception.register({

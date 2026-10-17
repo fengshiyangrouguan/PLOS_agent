@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 把 QQ 的**通知帧**与**申请帧**映射成感知信号 —— **纯逻辑**。
  *
  * ★ 这个模块**不认识 cordis**（不吃 `ctx` ✓）—— 与 `attention/preempt.ts` /
@@ -315,10 +315,32 @@ export function mapNotice(
 }
 
 /**
+ * ★★ 一条**待办型**申请的指纹 ✗ —— ★ `pending` 里的键 ✓（2026-10-17 收成一处 ✓）。
+ *
+ * ## 为什么要一个函数（★ 而不是两边各拼一次 ✗）
+ *
+ * ★ 写它的是 {@link mapRequest} ✓（★ 产出信号时 ✓），
+ * ★★ 而**删它的是 `signals/index.ts` 里的监听器** ✗ —— 收到 `qq/request-consumed` 之后 ✓。
+ * ⇒ ★★★ 那意味着**同一个字符串在两个插件里各拼一遍** ✗✓ ——
+ * ★ 拼歪了就是"删不掉"✓，而那个症状**正是这次的真机故障**（★ 通知反复跳、无法被消费 ✓✓）。
+ * ⇒ ★★★★ 所以收成这一个函数 ✓，两边都用它 ✓
+ * （★ 自检直接对比它与 `mapRequest` 的输出，歪了就红 ✓）。
+ *
+ * @param flag - 原始帧里的 `flag` ✓。
+ * @returns 指纹，形如 `req:u_abc` ✓。
+ */
+export function requestPendingKey(flag: string): string {
+  return `req:${flag}`
+}
+
+/**
  * 把一个 `post_type=request` 的帧映射成信号。
  *
  * ★★ 这一类**全部是待办型** ✓ —— 「**要等待处理完才清掉**」✓（用户定案 ✓）：
  * 它们**不会**因为"送进 agent"而消失 ✓，只会因为**她批准／拒绝**而消失 ✓。
+ *
+ * ★ 而"她批准／拒绝"这件事的接线是 **`qq/request-consumed`** ✗（2026-10-17 ✓）——
+ * ★★ 见 `signals/index.ts` 里那个 `ctx.on` ✓。
  *
  * @param raw - 原始申请帧 ✓。
  * @param ctx - 外部信息。
@@ -347,7 +369,7 @@ export function mapRequest(
       source: privateConversation(user),
       priority: PRIORITY_DIRECT,
       signalClass: 'todo',
-      fingerprint: `req:${flag}`,
+      fingerprint: requestPendingKey(flag),
       flag,
     }
   }
@@ -363,7 +385,7 @@ export function mapRequest(
         source: groupConversation(groupId),
         priority: PRIORITY_DIRECT,
         signalClass: 'todo',
-        fingerprint: `req:${flag}`,
+        fingerprint: requestPendingKey(flag),
         flag,
       }
     }
@@ -381,7 +403,7 @@ export function mapRequest(
       source: groupConversation(groupId),
       priority: PRIORITY_DIRECT,
       signalClass: 'todo',
-      fingerprint: `req:${flag}`,
+      fingerprint: requestPendingKey(flag),
       flag,
     }
   }

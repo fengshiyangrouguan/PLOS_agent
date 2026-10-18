@@ -417,7 +417,7 @@
           mode: whitelist
           # 四个群。**`871074118`（300+ 人的群）已从名单移除** ——
           # 见上面那条成本提醒：白名单里的群会被**逐条**收下，顶层图片逐张调 VLM。
-          list: ['784394807', '728636404', '914615760', '1018564056']
+          list: ['784394807', '728636404', '914615760', '1018564056','871074118']
         private:
           # blacklist + 空表 = **所有私聊都放行**（不是"不收私聊"）。
           mode: blacklist
@@ -451,14 +451,24 @@
         #   ② **加好友／加群申请**（`post_type=request` 的字段，尤其 `flag` 在哪 ✓）
         #   ③ **退群通知**（`notice_type=group_decrease` 的字段名 ✓）
         #   ★ 拿到真实帧之后再收紧 `qq/notice` / `qq/request` 的类型 ✓
-        # ★ 抓帧已完成（2026-10-15）⇒ **关掉** ✓
-        #   那次抓到的形状全部记在 `PLOS/docs/qq-notifications.md` ✓
-        #   （notice 11 帧 ＋ request 4 帧 ✓，含"`input_status` 是高频噪音"那条关键结论 ✓）。
-        #   ★ 要再抓：把 `enabled` 改回 `true` 即可 —— 落点 `$DSH_HOME/data/raw-frames.json` ✓。
+        # ★★ **关掉了**（2026-10-16 晚）—— ★ 目标已达到 ✓，结论在
+        #   `PLOS/docs/qq-notifications.md` **§6.0** ✓。
+        #
+        #   ★ **QQ 空间的评论／点赞不会推通知** ✗ —— ★ 两侧证据一致：
+        #     · **源码**：SnowLuma **v1.14.22** 的 `notice_type` 全集里**没有任何空间类** ✓
+        #     · **抓帧**：notice 只有 `notify/input_status` ×9 ＋ `group_recall` ×1 ✓，
+        #       而 qzone／comment／like／praise **全是 0** ✓✓
+        #   ⇒ ★ 结论：★ 只能**轮询** `get_qzone_msg_list` 的 `comment_num` ✓
+        #     （★ 而用户定：★ **那条整条跳过** ✗ —— ★ 只是拿不到评论内容，价值不够 ✓）。
+        #
+        #   ★ 要再抓：把 `enabled` 改回 `true` ✓ —— 落点 `$DSH_HOME/data/raw-frames.json` ✓。
+        #   ⚠️ `samplesPerKind` 留 **60**（★ 原先是 20 ✓）—— ★ 它是**按 kind 分**的槽 ✓，
+        #     而 `notify/input_status`（"对方正在输入"）**会刷屏** ✗ ⇒
+        #     ★ 20 个槽很容易被它一个人占满 ✓（★ 这次它占了 9/10 ✓）。
         capture:
           enabled: false
           path: !!js "process.env.DSH_HOME + '/data/raw-frames.json'"
-          samplesPerKind: 20
+          samplesPerKind: 60
     # ② 工具包装：把 ctx.qq 的能力包成模型可调用的工具。
     # inject ['tools','qq']，两者都就绪后才激活。
     - id: qq-tools
@@ -574,6 +584,24 @@
     - id: qq-resident
       name: './plugins/qq/resident/index.ts'
       config:
+        # ★★ **这个 id 是会话的存储键** ✗ —— ★ **改它 ＝ 开一个全新会话** ✓✓
+        #   （★ 落点：`sessions/<cwd>/<id>/` ＋ `storages/session_projcache/sessions/<id>.json` ✓）
+        #
+        #   ## 什么时候会换它
+        #   ★ **迁移到别的机器／别的 `$DSH_HOME` 时连 id 一起改** ✗✓ ——
+        #   ★★ 那台机器上**没有旧 id 的存储** ⇒ `stat` 找不到 ⇒ **`create`** ✓
+        #   ⇒ ★★★ **自然是一个全新会话** ✓（★ 不带旧历史 ✓✓）。
+        #
+        #   ## 为什么"历史"这件事要紧（2026-10-16 的观察 ✓，留作以后参考）
+        #   ★ 「**请求是 session log 的纯函数**」✓ ⇒ ★★ **旧会话的历史每轮都在当
+        #   few-shot 示范** ✗ —— ★ 一份累积了几百条**助手腔**的日志
+        #   （"我应该……" ✓／"作为AI，我应该避免……" ✓／工作汇报 ＋ ✅ 列表 ✓／时间播报 ✓）
+        #   会把那种腔调**一直示范下去** ✓，★ 那句"人设排在提示词最后"压不过它 ✗。
+        #   ⇒ ★★ 所以**换 id（＝ 开新会话）是让语气回到人设的最有效手段** ✓✓。
+        #
+        #   ## 现在
+        #   ★★ **保持 `plos`** ✓ —— ★ 这个会话按用户的意思"就这样"✓，
+        #   ★ 整份快照在 `data/session-backups/2026-10-16_225040/` ✓（含切回步骤 ✓）。
         sessionId: plos
         cwd: ''
         greeting: !!js "process.env.QQ_RESIDENT_GREETING ?? ''"
@@ -631,6 +659,9 @@
       name: './plugins/llm_throttle/index.ts'
       config:
         enabled: true
+        # ★ 必须与 `qq-resident` 的 `sessionId` **保持一致** ✗ ——
+        #   它靠这个认出"常驻会话"（★ 那一路**不排队** ✓ —— 配额让给她 ✓）。
+        #   ⇒ ★★ **换 id 时这两处要一起改** ✓✓。
         residentSessionId: plos
 
     # ★★ 工具包（渐进式披露）—— 把不常用的工具**收进包**，按需取用。
